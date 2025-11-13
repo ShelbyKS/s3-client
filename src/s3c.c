@@ -1,9 +1,5 @@
-#include "s3c.h"
-#include <stdlib.h>
-#include <string.h>
+#include <jansson.h>
 #include <tarantool/curl/curl.h>
-#include <stdio.h>
-#include <tarantool/module.h>
 
 #define BATCH_DELETE_LIMIT 1000
 #define LIBCURL_WITH_AWS_SIGV4 0x073B00 // 7.59.0 (где впервые появился AWS SigV4)
