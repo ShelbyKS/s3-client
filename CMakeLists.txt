@@ -133,7 +133,6 @@ if (BUILD_TARANTOOL_MODULE)
         PRIVATE
             ${S3CLIENT_PUBLIC_INCLUDE_DIR}
             ${CMAKE_CURRENT_SOURCE_DIR}/include/s3-adapters
-            ${CMAKE_CURRENT_SOURCE_DIR}/third_party
             ${TARANTOOL_INCLUDE_DIRS}
     )
 
@@ -163,7 +162,6 @@ if (BUILD_TARANTOOL_MODULE)
         PRIVATE
             ${S3CLIENT_PUBLIC_INCLUDE_DIR}
             ${CMAKE_CURRENT_SOURCE_DIR}/include/s3-adapters
-            ${CMAKE_CURRENT_SOURCE_DIR}/third_party
             ${TARANTOOL_INCLUDE_DIRS}
     )
 

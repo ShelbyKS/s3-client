@@ -8,7 +8,8 @@
  *  - никакого ev_run() здесь нет.
  */
 
-#include "tarantool_ev.h"
+// TODO: убедиться в совместимости с tarantool libev
+#include <ev.h>
 #include <s3-adapters/reactor_tarantool.h>
 #include <stdlib.h>
 
@@ -194,7 +195,7 @@ s3_client_config_init_tarantool(s3_client_config_t *cfg,
     if (cfg == NULL || loop == NULL)
         return -1;
 
-    s3_client_config_init(cfg); /* generic init: обнуляет, ставит дефолты */
+    s3_client_config_init_default(cfg); /* generic init: обнуляет, ставит дефолты */
 
     s3_reactor_t r;
     if (s3_reactor_init_tarantool(&r, loop) != 0)
