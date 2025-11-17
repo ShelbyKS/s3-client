@@ -110,6 +110,7 @@ set_target_properties(s3client PROPERTIES
 if (BUILD_TARANTOOL_MODULE)
 
     find_package(PkgConfig REQUIRED)
+    find_package(Tarantool REQUIRED)
     pkg_check_modules(TARANTOOL REQUIRED tarantool)
 
     message(STATUS "Found Tarantool: ${TARANTOOL_VERSION}")
