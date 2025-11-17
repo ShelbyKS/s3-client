@@ -1,111 +1,251 @@
-cmake_minimum_required(VERSION 3.12)
-project(s3c C)
+cmake_minimum_required(VERSION 3.16)
 
-# Allow local Find*.cmake modules (you have FindJansson.cmake and FindTarantool.cmake)
-set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake" ${CMAKE_MODULE_PATH})
+project(s3_client_tarantool
+    VERSION 0.1.0
+    LANGUAGES C)
 
-# -----------------------------------------------------------------------------
-# Dependencies
-# -----------------------------------------------------------------------------
-find_package(Tarantool REQUIRED)
-find_package(Jansson REQUIRED)
+# ---------------------------------------------------------
+# Опции сборки
+# ---------------------------------------------------------
 
-# -----------------------------------------------------------------------------
-# Sanitizers
-# -----------------------------------------------------------------------------
-set(S3C_SANITIZER_FLAGS "")
-option(S3C_ASAN_ENABLED "Enable AddressSanitizer" OFF)
-if(S3C_ASAN_ENABLED)
-    string(JOIN " " S3C_SANITIZER_FLAGS "-fno-omit-frame-pointer"
-                              "-fsanitize=address"
-                              "-fsanitize-recover=address")
-endif()
+option(BUILD_TARANTOOL_MODULE "Build Tarantool integration (adapter + Lua module)" ON)
+option(BUILD_SHARED_LIBS      "Build shared libraries instead of static" OFF)
+option(BUILD_EXAMPLES         "Build example programs" OFF)
+option(BUILD_TESTS            "Build tests" OFF)
 
-# -----------------------------------------------------------------------------
-# User provided extra flags
-# -----------------------------------------------------------------------------
-set(S3C_EXTRA_COMPILER_FLAGS "" CACHE STRING "Extra flags to pass to C/C++ compilers")
+# ---------------------------------------------------------
+# Общие настройки компиляции
+# ---------------------------------------------------------
 
-# Core compiler flags (sensible defaults oriented to safety and diagnostics)
-set(S3C_COMPILER_FLAGS " \
--ggdb3 -O2 -pipe -D_FORTIFY_SOURCE=2 \
--fstack-protector-strong -grecord-gcc-switches -fstack-clash-protection \
--Wall -Wextra -Werror=unused-result -Werror=format-security -Werror=switch-unreachable \
--Wshadow -Werror=implicit-fallthrough ${S3C_EXTRA_COMPILER_FLAGS}")
+set(CMAKE_C_STANDARD 99)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_C_EXTENSIONS OFF)
 
-option(DIAGNOSTIC_COLOR "Force use of -fdiagnostic-color=always" OFF)
-if (DIAGNOSTIC_COLOR)
-    string(APPEND S3C_COMPILER_FLAGS " -fdiagnostics-color=always")
-endif()
-
-# Prevent CMake from forcing a C++ standard flag on us
-set(CMAKE_CXX_STANDARD_DEFAULT "")
-
-# Apply flags
-set(CMAKE_C_FLAGS "-fPIC -std=gnu11 -Werror=implicit-function-declaration -Werror=jump-misses-init ${CMAKE_C_FLAGS} ${S3C_COMPILER_FLAGS} ${S3C_SANITIZER_FLAGS}")
-set(CMAKE_CXX_FLAGS "-std=gnu++17 -fexceptions ${S3C_COMPILER_FLAGS} ${S3C_SANITIZER_FLAGS}")
-set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} ${S3C_SANITIZER_FLAGS}")
-set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${S3C_SANITIZER_FLAGS}")
-
-# -----------------------------------------------------------------------------
-# Project layout variables
-# -----------------------------------------------------------------------------
-set(S3C_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src)
-set(S3C_LIBS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/libs)
-set(S3C_LIBS_BIN_DIR ${CMAKE_CURRENT_BINARY_DIR}/libs)
-
-# -----------------------------------------------------------------------------
-# Build bundled 'small' allocator from libs/small if present
-# -----------------------------------------------------------------------------
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/libs/small/CMakeLists.txt")
-    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libs/small)
-    set(SMALL_LIBRARIES ${S3C_LIBS_BIN_DIR}/small/libsmall.a)
-    set(SMALL_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/libs/small/include ${CMAKE_CURRENT_SOURCE_DIR}/libs/small/third_party)
-
-    # Exclude small's tests
-    set_target_properties(
-        slab_cache.test region.test ibuf.test obuf.test rlist.test rb.test
-        rb_aug.test rb_rand.test mempool.test small_class.test small_class_branchless.test
-        small_granularity.test lf_lifo.test slab_arena.test arena_mt.test matras.test
-        lsregion.test quota.test quota_lessor.test static.test
-        PROPERTIES EXCLUDE_FROM_ALL 1 EXCLUDE_FROM_DEFAULT_BUILD 1
-    )
+if (MSVC)
+    add_compile_options(/W4)
 else()
-    set(SMALL_LIBRARIES "")
-    set(SMALL_INCLUDE_DIRS "")
+    add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
-# -----------------------------------------------------------------------------
-# Sources and target
-# -----------------------------------------------------------------------------
-file(GLOB S3C_SOURCES "${S3C_SOURCE_DIR}/*.c")
-file(GLOB S3C_HEADERS "${S3C_SOURCE_DIR}/*.h")
+# ---------------------------------------------------------
+# Зависимость: libcurl
+# ---------------------------------------------------------
 
-add_library(s3c SHARED ${S3C_SOURCES})
+find_package(CURL REQUIRED)
 
-option(S3C_HLP_ALLOC_STAT "Enable allocators stat scraping (may cause perf decrease)" ON)
-if (S3C_HLP_ALLOC_STAT)
-    target_compile_definitions(s3c PRIVATE S3C_HLP_ALLOC_STAT=1)
+message(STATUS "Found CURL: ${CURL_VERSION_STRING}")
+message(STATUS "CURL include dirs: ${CURL_INCLUDE_DIRS}")
+message(STATUS "CURL libs: ${CURL_LIBRARIES}")
+
+# ---------------------------------------------------------
+# Общие include-директории
+# ---------------------------------------------------------
+
+set(S3CLIENT_PUBLIC_INCLUDE_DIR
+    ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+include_directories(
+    ${S3CLIENT_PUBLIC_INCLUDE_DIR}
+    ${CURL_INCLUDE_DIRS}
+)
+
+# ---------------------------------------------------------
+# Источники основной loop-agnostic библиотеки s3client
+# ---------------------------------------------------------
+
+set(S3CLIENT_CORE_SOURCES
+    src/core/client.c
+    src/core/request.c
+    src/core/error.c
+    src/core/signer_v4.c
+    src/core/config.c
+)
+
+set(S3CLIENT_CURL_SOURCES
+    src/curl/curl_easy_s3.c
+    src/curl/curl_multi_driver.c
+)
+
+set(S3CLIENT_HIGHLEVEL_SOURCES
+    src/highlevel/get_buffer.c
+    src/highlevel/get_fd.c
+    src/highlevel/put_buffer.c
+    src/highlevel/put_fd.c
+)
+
+add_library(s3client
+    ${S3CLIENT_CORE_SOURCES}
+    ${S3CLIENT_CURL_SOURCES}
+    ${S3CLIENT_HIGHLEVEL_SOURCES}
+)
+
+target_include_directories(s3client
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/core
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/curl
+)
+
+target_link_libraries(s3client
+    PRIVATE
+        ${CURL_LIBRARIES}
+)
+
+target_compile_definitions(s3client
+    PRIVATE
+        # например, CURL_STATICLIB, если понадобится:
+        # CURL_STATICLIB
+)
+
+set_target_properties(s3client PROPERTIES
+    POSITION_INDEPENDENT_CODE ON
+    OUTPUT_NAME "s3client"
+)
+
+# ---------------------------------------------------------
+# Tarantool integration (адаптер + sync-хелперы + Lua-модуль)
+# ---------------------------------------------------------
+
+if (BUILD_TARANTOOL_MODULE)
+
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(TARANTOOL REQUIRED tarantool)
+
+    message(STATUS "Found Tarantool: ${TARANTOOL_VERSION}")
+    message(STATUS "Tarantool include dirs: ${TARANTOOL_INCLUDE_DIRS}")
+    message(STATUS "Tarantool libs: ${TARANTOOL_LIBRARIES}")
+
+    # 1) Библиотека интеграции: адаптер reactor_tarantool + sync_get/put.
+    #    Её можно линковать из C-кода под Tarantool (без Lua).
+    set(S3CLIENT_TARANTOOL_ADAPTER_SOURCES
+        src/adapters/reactor_tarantool.c
+        src/tarantool/sync_get.c
+        src/tarantool/sync_put.c
+    )
+
+    add_library(s3client_tarantool STATIC
+        ${S3CLIENT_TARANTOOL_ADAPTER_SOURCES}
+    )
+
+    target_include_directories(s3client_tarantool
+        PRIVATE
+            ${S3CLIENT_PUBLIC_INCLUDE_DIR}
+            ${CMAKE_CURRENT_SOURCE_DIR}/include/s3-adapters
+            ${TARANTOOL_INCLUDE_DIRS}
+    )
+
+    target_link_libraries(s3client_tarantool
+        PRIVATE
+            s3client
+            ${TARANTOOL_LIBRARIES}
+    )
+
+    set_target_properties(s3client_tarantool PROPERTIES
+        POSITION_INDEPENDENT_CODE ON
+        OUTPUT_NAME "s3client_tarantool"
+    )
+
+    # 2) Lua-модуль s3.so (опциональный), тонкая обёртка над s3client_tarantool.
+    add_library(s3_tarantool SHARED
+        src/tarantool/module.c
+    )
+
+    target_link_libraries(s3_tarantool
+        PRIVATE
+            s3client_tarantool
+            ${TARANTOOL_LIBRARIES}
+    )
+
+    target_include_directories(s3_tarantool
+        PRIVATE
+            ${S3CLIENT_PUBLIC_INCLUDE_DIR}
+            ${CMAKE_CURRENT_SOURCE_DIR}/include/s3-adapters
+            ${TARANTOOL_INCLUDE_DIRS}
+    )
+
+    set_target_properties(s3_tarantool PROPERTIES
+        OUTPUT_NAME "s3"  # s3.so
+        PREFIX ""
+    )
+
 endif()
 
-# Link required libraries
-target_link_libraries(s3c PRIVATE ${SMALL_LIBRARIES} Jansson::Jansson ${TARANTOOL_LIBRARIES})
+# ---------------------------------------------------------
+# Примеры
+# ---------------------------------------------------------
 
-# Include directories
-target_include_directories(s3c PRIVATE ${S3C_SOURCE_DIR} ${SMALL_INCLUDE_DIRS} ${TARANTOOL_INCLUDE_DIRS})
+# if (BUILD_EXAMPLES)
+#     add_executable(example_simple_get_put
+#         examples/simple_get_put.c
+#     )
+# 
+#     target_link_libraries(example_simple_get_put
+#         PRIVATE
+#             s3client
+#     )
+# 
+#     target_include_directories(example_simple_get_put
+#         PRIVATE
+#             ${S3CLIENT_PUBLIC_INCLUDE_DIR}
+#     )
+# endif()
 
-# Compiler definitions and options
-target_compile_options(s3c PRIVATE -D_FILE_OFFSET_BITS=64 -D_GNU_SOURCE=1)
-set_target_properties(s3c PROPERTIES PREFIX "" OUTPUT_NAME s3c C_STANDARD 11 CXX_STANDARD 17)
-set_property(TARGET s3c PROPERTY POSITION_INDEPENDENT_CODE ON)
+# ---------------------------------------------------------
+# Тесты (каркас)
+# ---------------------------------------------------------
 
-# Ensure small is built before s3c when we use the bundled one
-if(TARGET small)
-    add_dependencies(s3c small)
+if (BUILD_TESTS)
+    enable_testing()
+
+    add_executable(test_client_basic
+        tests/unit/test_client_basic.c
+    )
+
+    target_link_libraries(test_client_basic
+        PRIVATE
+            s3client
+    )
+
+    add_test(NAME test_client_basic
+             COMMAND test_client_basic)
 endif()
 
-# -----------------------------------------------------------------------------
-# Installation rules
-# -----------------------------------------------------------------------------
-install(TARGETS s3c LIBRARY DESTINATION ${TARANTOOL_INSTALL_LIBDIR}/${PROJECT_NAME}/)
-install(FILES ${S3C_HEADERS} DESTINATION ${TARANTOOL_INSTALL_INCLUDEDIR}/${PROJECT_NAME}/)
+# ---------------------------------------------------------
+# Установка
+# ---------------------------------------------------------
+
+install(TARGETS s3client
+        EXPORT s3clientTargets
+        ARCHIVE DESTINATION lib
+        LIBRARY DESTINATION lib
+        RUNTIME DESTINATION bin)
+
+if (BUILD_TARANTOOL_MODULE)
+    install(TARGETS s3client_tarantool
+            ARCHIVE DESTINATION lib
+            LIBRARY DESTINATION lib
+            RUNTIME DESTINATION lib)
+
+    install(TARGETS s3_tarantool
+            LIBRARY DESTINATION lib
+            RUNTIME DESTINATION lib)
+endif()
+
+# core-хедеры
+install(DIRECTORY include/s3
+        DESTINATION include)
+
+# адаптеры (reactor_tarantool.h и т.п.)
+install(DIRECTORY include/s3-adapters
+        DESTINATION include)
+
+# Tarantool sync API
+install(FILES include/s3-tarantool.h
+        DESTINATION include)
+
+# (опционально) экспорт для find_package:
+# install(EXPORT s3clientTargets
+#         FILE s3clientTargets.cmake
+#         NAMESPACE s3::
+#         DESTINATION lib/cmake/s3client)
