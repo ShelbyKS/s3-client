@@ -112,7 +112,6 @@ if (BUILD_TARANTOOL_MODULE)
 
     find_package(PkgConfig REQUIRED)
     find_package(Tarantool REQUIRED)
-    pkg_check_modules(TARANTOOL REQUIRED tarantool)
 
     message(STATUS "Found Tarantool: ${TARANTOOL_VERSION}")
     message(STATUS "Tarantool include dirs: ${TARANTOOL_INCLUDE_DIRS}")
