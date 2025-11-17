@@ -8,7 +8,7 @@
  *  - никакого ev_run() здесь нет.
  */
 
-#include "third_party/tarantool_ev.h"  /* корректный ev.h из Tarantool */
+#include "tarantool_ev.h"  /* корректный ev.h из Tarantool */
 #include <s3-adapters/reactor_tarantool.h>
 #include <stdlib.h>
 
