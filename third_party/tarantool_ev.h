@@ -1,6 +1,6 @@
+#ifndef TARANTOOL_EV_H_INCLUDED
+#define TARANTOOL_EV_H_INCLUDED
 /*
- * Copyright 2010-2020, Tarantool AUTHORS, please see AUTHORS file.
- *
  * Redistribution and use in source and binary forms, with or
  * without modification, are permitted provided that the following
  * conditions are met:
@@ -29,31 +29,47 @@
  * SUCH DAMAGE.
  */
 
-#include "small_class.h"
-#include <assert.h>
-#include <math.h>
-#include <stddef.h>
+#pragma GCC system_header
 
-void
-small_class_create(struct small_class *sc, unsigned granularity,
-		   float desired_factor, unsigned min_alloc, float *actual_factor)
-{
-	assert(granularity > 0); /* size cannot be multiple of zero. */
-	assert((granularity & (granularity - 1)) == 0); /* must power of 2. */
-	assert(desired_factor > 1.f);
-	assert(desired_factor <= 2.f);
-	assert(min_alloc > 0); /* Cannot allocate zero. */
-	assert(actual_factor != NULL);
+#include "trivia/config.h"
+#include <time.h>
+#include <sys/types.h>
+#include <sys/stat.h>
 
-	sc->granularity = granularity;
-	sc->ignore_bits_count = __builtin_ctz(granularity);
-	float log2 = logf(2);
-	sc->effective_bits = (unsigned)(logf(log2 / logf(desired_factor)) / log2 + .5);
-	sc->effective_size = 1u << sc->effective_bits;
-	sc->effective_mask = sc->effective_size - 1u;
-	sc->size_shift = min_alloc - granularity;
-	sc->size_shift_plus_1 = sc->size_shift + 1;
+#define EV_MULTIPLICITY 1
+#define EV_COMPAT3 0
 
-	sc->actual_factor = powf(2, 1.f / powf(2, sc->effective_bits));
-	*actual_factor = sc->actual_factor;
-}
+#if defined(ENABLE_BUNDLED_LIBEV)
+#define EV_STANDALONE 1
+#define EV_USE_SELECT 1
+#define EV_USE_POLL 1
+#define EV_USE_NANOSLEEP 1
+#define EV_PERIODIC_ENABLE 1
+#define EV_IDLE_ENABLE 1
+#define EV_STAT_ENABLE 1
+#define EV_FORK_ENABLE 1
+#define EV_CONFIG_H 0
+#define EV_USE_FLOOR 1
+#ifdef HAVE_CLOCK_GETTIME_DECL
+# define EV_USE_REALTIME 1
+# define EV_USE_MONOTONIC 1
+#endif
+#include <libev/ev.h>
+#else /* !defined(ENABLE_BUNDLED_LIBEV) */
+#include <ev.h>
+#endif
+
+#if defined(__cplusplus)
+extern "C" {
+#endif /* defined(__cplusplus) */
+
+extern const ev_tstamp TIMEOUT_INFINITY;
+
+typedef void (*ev_io_cb)(ev_loop *, ev_io *, int);
+typedef void (*ev_async_cb)(ev_loop *, ev_async *, int);
+
+#if defined(__cplusplus)
+} /* extern "C" */
+#endif /* defined(__cplusplus) */
+
+#endif /* TARANTOOL_EV_H_INCLUDED */
