@@ -108,6 +108,7 @@ set_target_properties(s3client PROPERTIES
 # ---------------------------------------------------------
 
 if (BUILD_TARANTOOL_MODULE)
+    set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake" ${CMAKE_MODULE_PATH})
 
     find_package(PkgConfig REQUIRED)
     find_package(Tarantool REQUIRED)
