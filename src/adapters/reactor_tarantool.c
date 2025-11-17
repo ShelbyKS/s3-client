@@ -9,7 +9,7 @@
  */
 
 #include "third_party/tarantool_ev.h"  /* корректный ev.h из Tarantool */
-#include <s3/reactor_tarantool.h>
+#include <s3-adapters/reactor_tarantool.h>
 #include <stdlib.h>
 
 /* ---------- Внутренние структуры-обёртки для libev ---------- */
