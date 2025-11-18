@@ -208,23 +208,23 @@ endif()
 
 if (BUILD_EXAMPLES)
     if (NOT LIBEV_FOUND)
-        message(WARNING "BUILD_EXAMPLES=ON, но libev не найден — example_simple_get_put не будет собран")
+        message(WARNING "BUILD_EXAMPLES=ON, но libev не найден — libev_integration не будет собран")
     elseif (NOT BUILD_TARANTOOL_MODULE)
         message(WARNING "BUILD_EXAMPLES=ON, но BUILD_TARANTOOL_MODULE=OFF — "
-                        "example_simple_get_put использует reactor_tarantool и будет пропущен")
+                        "libev_integration использует reactor_tarantool и будет пропущен")
     else()
-        add_executable(example_simple_get_put
-            examples/simple_get_put.c
+        add_executable(libev_integration
+            examples/libev_integration.c
         )
 
-        target_include_directories(example_simple_get_put
+        target_include_directories(libev_integration
             PRIVATE
                 ${S3CLIENT_PUBLIC_INCLUDE_DIR}
                 ${LIBEV_INCLUDE_DIR}
                 ${CMAKE_CURRENT_SOURCE_DIR}/include/s3-adapters
         )
 
-        target_link_libraries(example_simple_get_put
+        target_link_libraries(libev_integration
             PRIVATE
                 s3client_tarantool
                 ${LIBEV_LIBRARY}
