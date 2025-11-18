@@ -38,6 +38,37 @@ message(STATUS "CURL include dirs: ${CURL_INCLUDE_DIRS}")
 message(STATUS "CURL libs: ${CURL_LIBRARIES}")
 
 # ---------------------------------------------------------
+# libev (для примеров). Не критично для основной библиотеки
+# ---------------------------------------------------------
+
+find_path(LIBEV_INCLUDE_DIR
+    NAMES ev.h
+    HINTS
+        /usr/include
+        /usr/local/include
+        /opt/homebrew/include
+    PATH_SUFFIXES libev
+)
+
+find_library(LIBEV_LIBRARY
+    NAMES ev libev
+    HINTS
+        /usr/lib
+        /usr/local/lib
+        /opt/homebrew/lib
+)
+
+if (LIBEV_INCLUDE_DIR AND LIBEV_LIBRARY)
+    set(LIBEV_FOUND TRUE)
+    message(STATUS "Found libev:")
+    message(STATUS "  includes: ${LIBEV_INCLUDE_DIR}")
+    message(STATUS "  library : ${LIBEV_LIBRARY}")
+else()
+    set(LIBEV_FOUND FALSE)
+    message(WARNING "libev not found – examples that require libev will be disabled")
+endif()
+
+# ---------------------------------------------------------
 # Общие include-директории
 # ---------------------------------------------------------
 
@@ -57,7 +88,6 @@ set(S3CLIENT_CORE_SOURCES
     src/core/client.c
     src/core/request.c
     src/core/error.c
-    src/core/signer_v4.c
     src/core/config.c
 )
 
@@ -176,21 +206,31 @@ endif()
 # Примеры
 # ---------------------------------------------------------
 
-# if (BUILD_EXAMPLES)
-#     add_executable(example_simple_get_put
-#         examples/simple_get_put.c
-#     )
-# 
-#     target_link_libraries(example_simple_get_put
-#         PRIVATE
-#             s3client
-#     )
-# 
-#     target_include_directories(example_simple_get_put
-#         PRIVATE
-#             ${S3CLIENT_PUBLIC_INCLUDE_DIR}
-#     )
-# endif()
+if (BUILD_EXAMPLES)
+    if (NOT LIBEV_FOUND)
+        message(WARNING "BUILD_EXAMPLES=ON, но libev не найден — example_simple_get_put не будет собран")
+    elseif (NOT BUILD_TARANTOOL_MODULE)
+        message(WARNING "BUILD_EXAMPLES=ON, но BUILD_TARANTOOL_MODULE=OFF — "
+                        "example_simple_get_put использует reactor_tarantool и будет пропущен")
+    else()
+        add_executable(example_simple_get_put
+            examples/simple_get_put.c
+        )
+
+        target_include_directories(example_simple_get_put
+            PRIVATE
+                ${S3CLIENT_PUBLIC_INCLUDE_DIR}
+                ${LIBEV_INCLUDE_DIR}
+                ${CMAKE_CURRENT_SOURCE_DIR}/include/s3-adapters
+        )
+
+        target_link_libraries(example_simple_get_put
+            PRIVATE
+                s3client_tarantool
+                ${LIBEV_LIBRARY}
+        )
+    endif()
+endif()
 
 # ---------------------------------------------------------
 # Тесты (каркас)

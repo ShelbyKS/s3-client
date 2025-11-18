@@ -9,9 +9,12 @@
  */
 
 // TODO: убедиться в совместимости с tarantool libev
+#define EV_MULTIPLICITY 1
+#define EV_COMPAT3 0
 #include <ev.h>
 #include <s3-adapters/reactor_tarantool.h>
 #include <stdlib.h>
+#include <stdio.h>
 
 /* ---------- Внутренние структуры-обёртки для libev ---------- */
 

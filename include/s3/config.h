@@ -115,10 +115,22 @@ typedef struct s3_client_config {
     const char *region;
 
     /*
+     * Имя сервиса для SigV4 ("s3", "execute-api", "lambda" и т.д.);
+     * По умолчанию (через init_default) — "s3".
+     */
+    const char *service;
+
+    /*
      * Использовать HTTPS (1) или HTTP (0).
      * По умолчанию (через init_default) — 1.
      */
     int endpoint_is_https;
+
+    /*
+     * Использовать CURLOPT_AWS_SIGV4.
+     * По умолчанию (через init_default) — 0.
+    */
+    int use_aws_sigv4;
 
     /*
      * Креды для S3.

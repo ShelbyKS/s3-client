@@ -17,6 +17,7 @@ s3_error_code_str(s3_error_code_t code)
     case S3_E_HTTP:             return "S3_E_HTTP";
     case S3_E_S3_ERROR:         return "S3_E_S3_ERROR";
     case S3_E_INTERNAL:         return "S3_E_INTERNAL";
+    case S3_E_UNSUPPORTED:      return "S3_E_UNSUPPORTED";
     default:                    return "S3_E_UNKNOWN";
     }
 }

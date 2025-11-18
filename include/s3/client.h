@@ -66,6 +66,7 @@ typedef enum s3_error_code {
     S3_E_CURL_GLOBAL,
     S3_E_CURL_INIT,
     S3_E_CURL_PERFORM,
+    S3_E_UNSUPPORTED,
 
     /* Таймауты / управление запросом */
     S3_E_TIMEOUT,

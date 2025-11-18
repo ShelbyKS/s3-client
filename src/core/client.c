@@ -269,6 +269,8 @@ s3_object_put(
 
     curl_easy_setopt(easy, CURLOPT_PRIVATE, req);
 
+    printf("before curl_multi_add_handle\n");
+
     CURLMcode mrc = curl_multi_add_handle(client->multi, easy);
     if (mrc != CURLM_OK) {
         if (done_cb != NULL) {

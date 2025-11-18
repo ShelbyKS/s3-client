@@ -13,6 +13,10 @@ s3_client_config_init_default(s3_client_config_t *cfg)
     /* Разумные дефолты. Можно потом подкрутить под реальные требования. */
 
     cfg->endpoint_is_https = 1;      /* по умолчанию HTTPS */
+    cfg->use_aws_sigv4 = 0;          /* по умолчанию отключено */
+
+    cfg->region = NULL;              /* пусть curl сам выведет из hostname */
+    cfg->service = "s3";
 
     cfg->connect_timeout_ms = 5000;  /* 5 секунд на connect */
     cfg->request_timeout_ms = 0;     /* 0 => без общего таймаута */

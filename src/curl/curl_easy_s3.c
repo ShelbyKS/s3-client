@@ -4,6 +4,7 @@
 #include <s3/types.h>
 
 #include <curl/curl.h>
+#include <curl/curlver.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -286,6 +287,48 @@ s3_build_object_url(const s3_client_config_t *cfg,
     return url;
 }
 
+// TODO: SSL, timeout'ы, verbose
+
+/* ------------------------------------------------------------
+ *  Включение AWS SigV4
+ * ------------------------------------------------------------ */
+
+static int
+s3_curl_apply_sigv4(CURL *easy, const s3_client_config_t *cfg)
+{
+    if (!cfg->use_aws_sigv4)
+        return 0;
+
+#if !defined(CURLAUTH_AWS_SIGV4)
+    // TODO: S3_E_UNSUPPORTED
+    return -1;
+#else
+    /* Проверяем наличие ключей */
+    if (!cfg->credentials.access_key_id || !cfg->credentials.secret_access_key) {
+        return -1;
+    }
+
+    /* Формируем aws:amz:REGION:SERVICE */
+    char sigv4_param[128];
+    const char *region  = cfg->region  ? cfg->region  : "";
+    const char *service = cfg->service ? cfg->service : "s3";
+
+    if (region[0] != '\0')
+        snprintf(sigv4_param, sizeof(sigv4_param), "aws:amz:%s:%s", region, service);
+    else
+        snprintf(sigv4_param, sizeof(sigv4_param), "aws:amz");
+
+    curl_easy_setopt(easy, CURLOPT_AWS_SIGV4, sigv4_param);
+
+    char userpwd[512];
+    snprintf(userpwd, sizeof(userpwd), "%s:%s", cfg->credentials.access_key_id, cfg->credentials.secret_access_key);
+    curl_easy_setopt(easy, CURLOPT_USERPWD, userpwd);
+
+    return 0;
+#endif
+}
+
+
 /* ------------------------------------------------------------
  * Фабрики CURL easy-хендлов для GET и PUT
  * ------------------------------------------------------------ */
@@ -303,6 +346,9 @@ s3_curl_easy_create_get(const s3_client_config_t      *cfg,
     CURL *easy = curl_easy_init();
     if (easy == NULL)
         return NULL;
+
+    /* Подключаем SigV4, если включено в конфиге. */
+    s3_curl_apply_sigv4(easy, cfg);
 
     char *url = s3_build_object_url(cfg, params->bucket, params->key);
     if (url == NULL) {
@@ -323,7 +369,6 @@ s3_curl_easy_create_get(const s3_client_config_t      *cfg,
 
     /* TODO:
      *  - таймауты из cfg;
-     *  - SigV4 (signer_v4.c).
      *
      * ВОПРОС памяти:
      *  - CURLOPT_URL копирует строку в libcurl,
@@ -348,6 +393,9 @@ s3_curl_easy_create_put(const s3_client_config_t      *cfg,
     CURL *easy = curl_easy_init();
     if (easy == NULL)
         return NULL;
+
+    /* Подключаем SigV4, если включено в конфиге. */
+    s3_curl_apply_sigv4(easy, cfg);
 
     char *url = s3_build_object_url(cfg, params->bucket, params->key);
     if (url == NULL) {

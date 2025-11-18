@@ -110,13 +110,33 @@ s3_curl_events_from_curl(int what)
     return events;
 }
 
-/* reactor → fd готов */
 static void
 s3_curl_reactor_io_cb(int events, void *cb_data)
 {
     s3_curl_socket_ctx_t *ctx = (s3_curl_socket_ctx_t *)cb_data;
-    if (ctx == NULL || ctx->client == NULL || ctx->client->multi == NULL)
+
+    if (ctx == NULL) {
+        fprintf(stderr,
+                "s3_curl_reactor_io_cb: ctx == NULL (events=%d)\n",
+                events);
         return;
+    }
+
+    if (ctx->client == NULL) {
+        fprintf(stderr,
+                "s3_curl_reactor_io_cb: ctx=%p client=NULL fd=%d events=%d\n",
+                (void *)ctx, (int)ctx->fd, events);
+        return;
+    }
+
+    if (ctx->client->multi == NULL) {
+        fprintf(stderr,
+                "s3_curl_reactor_io_cb: ctx=%p client=%p multi=NULL fd=%d events=%d\n",
+                (void *)ctx, (void *)ctx->client, (int)ctx->fd, events);
+        return;
+    }
+
+    s3_client_t *client = ctx->client;
 
     int action = 0;
     if (events & S3_IO_EVENT_READ)
@@ -125,19 +145,25 @@ s3_curl_reactor_io_cb(int events, void *cb_data)
         action |= CURL_CSELECT_OUT;
 
     int running = 0;
-    CURLMcode mrc = curl_multi_socket_action(ctx->client->multi,
-                                             ctx->fd,
-                                             action,
-                                             &running);
-    ctx->client->still_running = running;
+    CURLMcode mrc = curl_multi_socket_action(
+        client->multi,
+        ctx->fd,
+        action,
+        &running);
+
+    client->still_running = running;
 
     if (mrc != CURLM_OK) {
-        /* TODO: логирование/обработка ошибок CURLM. */
+        fprintf(stderr,
+                "s3_curl_reactor_io_cb: curl_multi_socket_action failed: %d\n",
+                (int)mrc);
+        return;
     }
 
     /* Проверить завершённые запросы. */
-    s3_client_multi_process_messages(ctx->client);
+    s3_client_multi_process_messages(client);
 }
+
 
 /* reactor → сработал таймер */
 static void
