@@ -66,7 +66,7 @@ if (BUILD_TNT_MODULE)
                         "Set TARANTOOL_INCLUDE_DIR or disable BUILD_TNT_MODULE.")
   endif()
 
-  add_library(tnt_s3 STATIC
+  add_library(tnt_s3 MODULE
       src/tnt_s3_module.c
       src/tnt_s3_adapter.c
   )
