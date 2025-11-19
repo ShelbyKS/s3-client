@@ -151,8 +151,8 @@ if (BUILD_TARANTOOL_MODULE)
     #    Её можно линковать из C-кода под Tarantool (без Lua).
     set(S3CLIENT_TARANTOOL_ADAPTER_SOURCES
         src/adapters/reactor_tarantool.c
-        src/tarantool/sync_get.c
-        src/tarantool/sync_put.c
+        src/tarantool/sync_get_fd.c
+        src/tarantool/sync_put_fd.c
     )
 
     add_library(s3client_tarantool STATIC
@@ -194,6 +194,15 @@ if (BUILD_TARANTOOL_MODULE)
             ${CMAKE_CURRENT_SOURCE_DIR}/include/s3-adapters
             ${TARANTOOL_INCLUDE_DIRS}
     )
+
+    if(APPLE)
+        # Для модулей Tarantool: разрешать undefined-символы
+        # (lua_*, fiber_*, ev_* и т.д.) до момента загрузки в tarantool.
+        target_link_options(s3_tarantool
+            PRIVATE
+                "-undefined" "dynamic_lookup"
+        )
+    endif()
 
     set_target_properties(s3_tarantool PROPERTIES
         OUTPUT_NAME "s3"  # s3.so

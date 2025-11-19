@@ -8,109 +8,125 @@ extern "C" {
 /*
  *  s3-tarantool.h
  *
- *  Публичный C-API Tarantool-модуля s3.
+ *  Синхронные helper-функции для использования s3client
+ *  из C-кода под управлением Tarantool.
  *
- *  Идея:
- *    - сам S3-клиент живёт в общей библиотеке (s3client, см. s3/client.h);
- *    - Tarantool-модуль (s3.so) поверх него предоставляет:
- *        * синхронные операции GET/PUT (через fiber + coio),
- *        * узкий C-API, чтобы другие C-модули Tarantool могли пользоваться
- *          уже настроенным клиентом (endpoint, credentials, reactor).
+ *  Ключевые идеи:
+ *    - НИКАКИХ глобальных клиентов внутри этого API;
+ *    - вызывающий код сам создаёт и хранит s3_client_t*;
+ *    - все sync-функции принимают s3_client_t* явно.
  *
- *  Этот хедер описывает именно этот C-API.
+ *  Типичный сценарий:
  *
- *  Реализацию (заполнение таблицы функций) мы можем сделать позже,
- *  не мешая сборке проекта.
+ *      struct ev_loop *loop = ev_default_loop(0);
+ *
+ *      s3_client_config_t cfg;
+ *      s3_client_config_init_default(&cfg);
+ *      s3_client_config_init_tarantool(&cfg, loop);
+ *
+ *      cfg.endpoint              = "...";
+ *      cfg.region                = "...";
+ *      cfg.credentials           = creds;
+ *      cfg.endpoint_is_https     = 0;
+ *      cfg.use_aws_sigv4         = 1;
+ *
+ *      s3_client_t *client = s3_client_new(&cfg);
+ *
+ *      int fd = open("file.bin", O_RDONLY);
+ *      s3_tarantool_rc_t rc = s3_sync_put_from_fd(
+ *          client, "bucket", "key", fd, 0, (uint64_t)-1);
+ *
+ *      close(fd);
+ *      s3_client_destroy(client);
+ *
+ *  Реализация sync-хелперов:
+ *    - внутри строит async-запрос (s3_object_*),
+ *    - дожидается выполнения запроса,
+ *    - возвращает код результата как обычная синхронная функция.
  */
 
 #include <stdint.h>
+#include <s3/client.h>   /* s3_client_t, s3_error_t, коды S3_... */
 
 /*
- * Коды возврата для синхронных операций Tarantool-модуля.
+ * Коды возврата для синхронных операций.
  *
- *  0  — успех;
- *  !=0 — ошибка (детализация будет зависеть от реализации;
- *         на первом этапе можно использовать отрицательные errno или
- *         собственные коды).
+ *  0   — успех (обычно соответствует S3_OK);
+ *  !=0 — ошибка:
+ *          * маппинг на s3_error_t::code будет описан в реализации;
+ *          * на первом этапе можно возвращать просто s3_error.code
+ *            или -errno для системных ошибок.
  */
 typedef int s3_tarantool_rc_t;
 
 /*
- * Небольшой API синхронных операций, доступный другим C-модулям.
+ * Синхронное скачивание объекта в файловый дескриптор.
  *
- * Все функции:
- *   - предполагается вызывать из Tarantool-fiber контекста;
- *   - внутри блокируют fiber, но НЕ блокируют event loop
- *     (используют coio/thread pool для файлового I/O).
+ *  - client  — уже инициализированный s3_client_t*, привязанный
+ *              к Tarantool/libev event loop через s3_client_config_init_tarantool();
+ *  - bucket, key — координаты объекта в S3;
+ *  - fd          — открытый файловый дескриптор (на запись);
+ *  - offset      — смещение в файле, с которого писать:
+ *                    * offset >= 0  => использовать pwrite(fd, ..., offset + ...);
+ *                    * offset < 0   => писать с текущей позиции (write()).
+ *
+ * Возвращает:
+ *  - 0   при успехе;
+ *  - !=0 при ошибке.
+ *
+ * Детали:
+ *  - внутри запускается асинхронный s3_object_get_to_fd(...),
+ *    event loop крутится до завершения (через ev_run()/analogue),
+ *    результат ошибки конвертируется в s3_tarantool_rc_t.
  */
-typedef struct s3_tarantool_sync_api {
-
-    /*
-     * Синхронный скачивание объекта в файловый дескриптор.
-     *
-     *  - bucket, key  — S3 координаты;
-     *  - fd           — уже открытый файловый дескриптор (на запись);
-     *  - offset       — смещение внутри файла, с которого начинать запись;
-     *
-     * Возвращает:
-     *  - 0   при успехе;
-     *  - !=0 при ошибке.
-     */
-    s3_tarantool_rc_t (*get_to_fd)(
-        const char *bucket,
-        const char *key,
-        int         fd,
-        int64_t     offset);
-
-    /*
-     * Синхронная загрузка объекта из файлового дескриптора.
-     *
-     *  - bucket, key  — S3 координаты;
-     *  - fd           — файловый дескриптор (на чтение);
-     *  - offset       — смещение в файле, с которого читать;
-     *  - limit        — сколько байт отправить; (uint64_t)-1 => до EOF.
-     *
-     * Возвращает:
-     *  - 0   при успехе;
-     *  - !=0 при ошибке.
-     */
-    s3_tarantool_rc_t (*put_from_fd)(
-        const char *bucket,
-        const char *key,
-        int         fd,
-        int64_t     offset,
-        uint64_t    limit);
-
-    /*
-     * В будущем здесь можно добавить:
-     *   - get_to_buffer / put_from_buffer;
-     *   - delete_object;
-     *   - list_objects и т.п.;
-     *   - функции для получения/смены текущей конфигурации.
-     */
-
-} s3_tarantool_sync_api_t;
+s3_tarantool_rc_t
+s3_sync_get_to_fd(s3_client_t    *client,
+                  const char     *bucket,
+                  const char     *key,
+                  int             fd,
+                  int64_t         offset);
 
 /*
- * Глобальный указатель на API.
+ * Синхронная загрузка объекта из файлового дескриптора (PUT).
  *
- *  - Инициализируется внутри Tarantool-модуля s3 (в module.c),
- *    когда модуль загружается Tarantool'ом.
- *  - Другие C-модули Tarantool могут проверять его на NULL и вызывать
- *    функции API, если он установлен.
+ *  - client  — уже инициализированный s3_client_t*;
+ *  - bucket, key — координаты объекта;
+ *  - fd          — файловый дескриптор (на чтение);
+ *  - offset      — смещение в файле, с которого читать:
+ *                    * offset >= 0  => использовать pread();
+ *                    * offset < 0   => читать с текущей позиции (read());
+ *  - limit       — сколько байт отправить:
+ *                    * (uint64_t)-1 => читать до EOF.
  *
- * Пример использования:
- *
- *    #include <s3-tarantool.h>
- *
- *    if (s3_tarantool_sync_api && s3_tarantool_sync_api->get_to_fd) {
- *        int rc = s3_tarantool_sync_api->get_to_fd("bucket", "key", fd, 0);
- *        if (rc != 0) {
- *            // обработать ошибку
- *        }
- *    }
+ * Возвращает:
+ *  - 0   при успехе;
+ *  - !=0 при ошибке.
  */
-extern s3_tarantool_sync_api_t *s3_tarantool_sync_api;
+s3_tarantool_rc_t
+s3_sync_put_from_fd(s3_client_t  *client,
+                    const char   *bucket,
+                    const char   *key,
+                    int           fd,
+                    int64_t       offset,
+                    uint64_t      limit);
+
+/*
+ * В будущем здесь можно добавить:
+ *
+ *    s3_tarantool_rc_t
+ *    s3_sync_get_to_buffer(s3_client_t   *client,
+ *                          const char    *bucket,
+ *                          const char    *key,
+ *                          s3_buffer_t   *buf);
+ *
+ *    s3_tarantool_rc_t
+ *    s3_sync_put_from_buffer(s3_client_t *client,
+ *                            const char  *bucket,
+ *                            const char  *key,
+ *                            s3_buffer_t *buf);
+ *
+ * и т.п. — но всё равно с явным s3_client_t*.
+ */
 
 #ifdef __cplusplus
 } /* extern "C" */
