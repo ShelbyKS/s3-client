@@ -42,7 +42,7 @@
 #include <s3_config.h>
 #include <s3_error.h>
 #include <s3_types.h>
-#include <tnt_s3_adapter.h>
+#include "tnt_s3_adapter.h"
 
 #define S3_LUA_CLIENT_MT "s3.client"
 

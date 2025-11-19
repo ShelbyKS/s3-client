@@ -42,7 +42,7 @@ set(S3_CLIENT_SOURCES
     src/s3_error.c
 )
 
-add_library(s3_client ${S3_CLIENT_SOURCES})
+add_library(s3_client SHARED ${S3_CLIENT_SOURCES})
 
 target_include_directories(s3_client
     PUBLIC
