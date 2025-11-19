@@ -38,8 +38,9 @@ message(STATUS "CURL include dirs: ${CURL_INCLUDE_DIRS}")
 message(STATUS "CURL libs: ${CURL_LIBRARIES}")
 
 # ---------------------------------------------------------
-# libev (для примеров). Не критично для основной библиотеки
+# libev (для примеров и Tarantool-адаптера)
 # ---------------------------------------------------------
+# Один раз ищем libev руками, а потом результат используем везде.
 
 find_path(LIBEV_INCLUDE_DIR
     NAMES ev.h
@@ -54,18 +55,21 @@ find_library(LIBEV_LIBRARY
     NAMES ev libev
     HINTS
         /usr/lib
+        /usr/lib64
         /usr/local/lib
         /opt/homebrew/lib
 )
 
 if (LIBEV_INCLUDE_DIR AND LIBEV_LIBRARY)
     set(LIBEV_FOUND TRUE)
+    set(LIBEV_INCLUDE_DIRS ${LIBEV_INCLUDE_DIR})
+    set(LIBEV_LIBRARIES    ${LIBEV_LIBRARY})
     message(STATUS "Found libev:")
-    message(STATUS "  includes: ${LIBEV_INCLUDE_DIR}")
-    message(STATUS "  library : ${LIBEV_LIBRARY}")
+    message(STATUS "  includes: ${LIBEV_INCLUDE_DIRS}")
+    message(STATUS "  library : ${LIBEV_LIBRARIES}")
 else()
     set(LIBEV_FOUND FALSE)
-    message(WARNING "libev not found – examples that require libev will be disabled")
+    message(WARNING "libev not found – examples and Tarantool integration that require libev may be disabled")
 endif()
 
 # ---------------------------------------------------------
@@ -138,6 +142,11 @@ set_target_properties(s3client PROPERTIES
 # ---------------------------------------------------------
 
 if (BUILD_TARANTOOL_MODULE)
+    # Нам обязательно нужен libev для reactor_tarantool
+    if (NOT LIBEV_FOUND)
+        message(FATAL_ERROR "libev is required to build Tarantool module (BUILD_TARANTOOL_MODULE=ON)")
+    endif()
+
     set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake" ${CMAKE_MODULE_PATH})
 
     find_package(PkgConfig REQUIRED)
@@ -147,8 +156,7 @@ if (BUILD_TARANTOOL_MODULE)
     message(STATUS "Tarantool include dirs: ${TARANTOOL_INCLUDE_DIRS}")
     message(STATUS "Tarantool libs: ${TARANTOOL_LIBRARIES}")
 
-    # 1) Библиотека интеграции: адаптер reactor_tarantool + sync_get/put.
-    #    Её можно линковать из C-кода под Tarantool (без Lua).
+    # 1) Библиотека интеграции: адаптер reactor_tarantool + sync_get/put FD.
     set(S3CLIENT_TARANTOOL_ADAPTER_SOURCES
         src/adapters/reactor_tarantool.c
         src/tarantool/sync_get_fd.c
@@ -164,12 +172,14 @@ if (BUILD_TARANTOOL_MODULE)
             ${S3CLIENT_PUBLIC_INCLUDE_DIR}
             ${CMAKE_CURRENT_SOURCE_DIR}/include/s3-adapters
             ${TARANTOOL_INCLUDE_DIRS}
+            ${LIBEV_INCLUDE_DIRS}
     )
 
     target_link_libraries(s3client_tarantool
         PRIVATE
             s3client
             ${TARANTOOL_LIBRARIES}
+            ${LIBEV_LIBRARIES}
     )
 
     set_target_properties(s3client_tarantool PROPERTIES
@@ -177,7 +187,7 @@ if (BUILD_TARANTOOL_MODULE)
         OUTPUT_NAME "s3client_tarantool"
     )
 
-    # 2) Lua-модуль s3.so (опциональный), тонкая обёртка над s3client_tarantool.
+    # 2) Lua-модуль s3.so (тонкая обёртка над s3client_tarantool).
     add_library(s3_tarantool SHARED
         src/tarantool/module.c
     )
@@ -186,6 +196,7 @@ if (BUILD_TARANTOOL_MODULE)
         PRIVATE
             s3client_tarantool
             ${TARANTOOL_LIBRARIES}
+            ${LIBEV_LIBRARIES}
     )
 
     target_include_directories(s3_tarantool
@@ -193,11 +204,13 @@ if (BUILD_TARANTOOL_MODULE)
             ${S3CLIENT_PUBLIC_INCLUDE_DIR}
             ${CMAKE_CURRENT_SOURCE_DIR}/include/s3-adapters
             ${TARANTOOL_INCLUDE_DIRS}
+            ${LIBEV_INCLUDE_DIRS}
     )
 
     if(APPLE)
-        # Для модулей Tarantool: разрешать undefined-символы
-        # (lua_*, fiber_*, ev_* и т.д.) до момента загрузки в tarantool.
+        # Для модулей Tarantool на macOS:
+        # разрешаем undefined-символы (lua_*, fiber_*, т.п.),
+        # но libev мы уже явно линкуем выше.
         target_link_options(s3_tarantool
             PRIVATE
                 "-undefined" "dynamic_lookup"
@@ -205,7 +218,7 @@ if (BUILD_TARANTOOL_MODULE)
     endif()
 
     set_target_properties(s3_tarantool PROPERTIES
-        OUTPUT_NAME "s3"  # s3.so
+        OUTPUT_NAME "s3"  # s3.so / s3.dylib
         PREFIX ""
     )
 
@@ -229,14 +242,14 @@ if (BUILD_EXAMPLES)
         target_include_directories(libev_integration
             PRIVATE
                 ${S3CLIENT_PUBLIC_INCLUDE_DIR}
-                ${LIBEV_INCLUDE_DIR}
+                ${LIBEV_INCLUDE_DIRS}
                 ${CMAKE_CURRENT_SOURCE_DIR}/include/s3-adapters
         )
 
         target_link_libraries(libev_integration
             PRIVATE
                 s3client_tarantool
-                ${LIBEV_LIBRARY}
+                ${LIBEV_LIBRARIES}
         )
     endif()
 endif()
@@ -299,3 +312,13 @@ install(FILES include/s3-tarantool.h
 #         FILE s3clientTargets.cmake
 #         NAMESPACE s3::
 #         DESTINATION lib/cmake/s3client)
+
+
+add_library(hello SHARED src/tarantool/hello.c)
+
+target_include_directories(hello PRIVATE ${TARANTOOL_INCLUDE_DIRS})
+
+set_target_properties(hello PROPERTIES
+    PREFIX ""            # чтобы была hello.so, а не libhello.so
+    OUTPUT_NAME "hello"  # hello.so
+)

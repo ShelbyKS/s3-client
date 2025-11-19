@@ -15,6 +15,7 @@
 #include <tarantool/module.h>  /* fiber_cond_* из модульного API */
 #include <stdbool.h>
 #include <string.h>
+#include <stdio.h>
 
 /* Контекст ожидания завершения PUT */
 typedef struct s3_sync_put_ctx {
@@ -97,11 +98,18 @@ s3_sync_put_from_fd(s3_client_t  *client,
         return ctx.err.code;
     }
 
+    printf("after s3_object_put_from_fd \n");
+
     /* Ожидаем завершения в текущем fiber. */
     while (!ctx.done) {
+        printf("before cond wait \n");
         fiber_cond_wait(ctx.cond);
+        printf("after cond wait \n");
     }
+    printf("ctx done \n");
 
     fiber_cond_delete(ctx.cond);
+
+    printf("cond deleted \n");
     return ctx.err.code;
 }
