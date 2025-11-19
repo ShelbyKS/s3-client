@@ -22,6 +22,7 @@
 #include <unistd.h> /* write, lseek */
 #include <errno.h>
 #include <stdint.h>
+#include <sys/types.h>  /* off_t */
 
 /* --------------------------------------------------------
  * Внутренний контекст для GET → fd

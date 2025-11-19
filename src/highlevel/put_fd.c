@@ -23,6 +23,7 @@
 #include <stdint.h>
 #include <unistd.h> /* read, pread, lseek */
 #include <errno.h>
+#include <sys/types.h>  /* off_t */
 
 /* --------------------------------------------------------
  * Внутренний контекст для PUT ← fd
