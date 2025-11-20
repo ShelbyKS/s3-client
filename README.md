@@ -2,27 +2,35 @@
 
 ## Структура файлов:
 ```
-tnt-s3-client/
+s3-tarantool/
 ├── CMakeLists.txt
+
 ├── include/
-│   ├── s3_client.h          # Публичное API для C/Tarantool
-│   ├── s3_error.h           # enum s3_error, s3_error_info
-│   ├── s3_types.h           # базовые типы/опции, если разрастётся
-│   └── s3_config.h          # опционально: дефайны версии, фичи
+│   └── s3/
+│       ├── client.h              # публичный API: init, destroy, put_fd, get_fd, options
+│       ├── alloc.h               # абстракция аллокатора
+│       └── curl_easy_factory.h   # интерфейс фабрики curl easy (для внутреннего использования)
+
 ├── src/
-│   ├── s3_env.c             # init/destroy глобальной среды (libcurl init и т.п.)
-│   ├── s3_client.c          # реализация публичного API (get_fd/put_fd + coio_call)
-│   ├── s3_http_backend.c    # создание backend (easy/multi), vtable
-│   ├── s3_curl_easy.c       # реализация backend на curl_easy_perform
-│   ├── s3_signer.c          # AWS SigV4 / заголовки (можно заглушку сначала)
-│   ├── s3_error.c           # человекочитаемые ошибки, маппинг кодов
-│   └── tnt_s3_module.c      # glue-код для Tarantool (module.h, lua API)
-├── cmake/
-│   └── FindTarantool.cmake  # поиск tarantool через pkg-config или руками
-├── tests/
-│   └── test_s3_client.c     # unit-тесты на "сырую" библиотеку (без Tarantool)
-└── examples/
-    └── simple_get_put.c     # пример использования C-API
+│   ├── client.c                  # реализация s3_client_t, init/delete, вызовы backend’ов
+│   ├── alloc.c                   # дефолтный аллокатор и интеграция со small
+│   ├── s3_internal.h             # внутренние структуры: client, vtable backend'ов
+
+│   ├── http/
+│   │   ├── curl_init.c           # curl_global_init / cleanup
+│   │   ├── curl_easy_factory.c   # создание easy handles для GET/PUT, колбэки, URL, headers
+│   │   ├── http_easy.c           # backend на curl_easy (coio_call)
+│   │   ├── http_multi.c          # backend на curl_multi (публичный слой)
+│   │   └── http_multi_worker.c   # поток curl_multi_loop + очереди (можно объединить)
+
+│   └── util/
+│       ├── queue.c               # thread-safe очередь для multi backend
+│       ├── queue.h
+│       ├── log.c                 # обёртка над say_* или stderr
+│       └── log.h
+
+└── README.md (опционально)
+
 ```
 
 ## Мультиплексирование
