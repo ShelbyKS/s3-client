@@ -22,6 +22,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <errno.h>
 
 /* ----------------------------------------------------------------------
  * Внутренние helpers
@@ -185,17 +188,42 @@ s3_client_put_fd(s3_client_t *client,
                                    "HTTP backend is not initialized");
     }
 
-    /* Строим URL: endpoint + "/" + bucket + "/" + key
-     *
-     * На первом шаге делаем по-простому, без URL-encoding ключа.
-     * TODO: добавить корректное экранирование в будущем.
-     */
+    size_t offset         = params->offset;
+    size_t content_length = params->content_length;
+
+    /* Если длина не задана — попробуем вычислить через fstat(fd). */
+    if (content_length == 0) {
+        struct stat st;
+        if (fstat(src_fd, &st) != 0) {
+            return s3_client_set_error(err, S3_EINVAL,
+                                       "fstat failed for src_fd");
+        }
+        if ((off_t)offset > st.st_size) {
+            return s3_client_set_error(err, S3_EINVAL,
+                                       "offset beyond end of file");
+        }
+        content_length = (size_t)(st.st_size - (off_t)offset);
+        if (content_length == 0) {
+            return s3_client_set_error(err, S3_EINVAL,
+                                       "nothing to upload (content_length == 0)");
+        }
+    }
+
+    /* Устанавливаем позицию в файле на offset. */
+    if (offset > 0) {
+        off_t res = lseek(src_fd, (off_t)offset, SEEK_SET);
+        if (res == (off_t)-1) {
+            return s3_client_set_error(err, S3_EINVAL,
+                                       "lseek failed for src_fd");
+        }
+    }
+
+    /* Строим URL: endpoint + "/" + bucket + "/" + key */
     char url[2048];
 
     const char *endpoint = client->config.endpoint;
     size_t endpoint_len = strlen(endpoint);
 
-    /* Уберём завершающий '/' у endpoint, чтобы не получить '//' */
     while (endpoint_len > 0 && endpoint[endpoint_len - 1] == '/')
         endpoint_len--;
 
@@ -206,61 +234,46 @@ s3_client_put_fd(s3_client_t *client,
                                    "resulting URL is too long");
     }
 
-    /* Готовим заголовки: Content-Length и, при наличии, Content-Type */
-    char content_length_hdr[64];
+    /* Готовим заголовки: только Content-Type (Content-Length задаст curl). */
     char content_type_hdr[256];
-    const char *headers[3];
+    const char *headers[1];
     size_t header_count = 0;
 
-    /* Content-Length: */
-    if (params->content_length > 0) {
-        snprintf(content_length_hdr, sizeof(content_length_hdr),
-                 "Content-Length: %zu", params->content_length);
-        headers[header_count++] = content_length_hdr;
-    }
-
-    /* Content-Type: */
     if (params->content_type != NULL && params->content_type[0] != '\0') {
         snprintf(content_type_hdr, sizeof(content_type_hdr),
                  "Content-Type: %s", params->content_type);
         headers[header_count++] = content_type_hdr;
     }
 
-    /* Host заголовок curl сам расставит по URL, так что явно не добавляем. */
-
-    /* Собираем HTTP-запрос для backend'а */
     struct s3_http_request req;
     memset(&req, 0, sizeof(req));
-    req.method       = S3_HTTP_PUT;
-    req.url          = url;
-    req.headers      = headers;
-    req.header_count = header_count;
-    req.src_fd       = src_fd;
-    req.dst_fd       = -1;
-    req.http_status  = 0;
+    req.method         = S3_HTTP_PUT;
+    req.url            = url;
+    req.headers        = headers;
+    req.header_count   = header_count;
+    req.src_fd         = src_fd;
+    req.dst_fd         = -1;
+    req.http_status    = 0;
+    req.content_length = (long long)content_length;
 
-    /* Если пользователь не дал s3_error_info — используем локальный */
     struct s3_error_info local_err;
     struct s3_error_info *perr = err != NULL ? err : &local_err;
     s3_error_reset(perr);
 
     int rc = client->http->perform(client->http, &req, perr);
     if (rc != S3_OK) {
-        /* backend уже заполнил err */
         return rc;
     }
 
-    /* Проверяем HTTP-статус: 2xx — успех */
     if (req.http_status >= 200 && req.http_status < 300) {
         if (perr == &local_err && err == NULL) {
-            /* локальная ошибка нам не нужна */
+            /* ignore */
         } else {
             s3_error_reset(perr);
         }
         return S3_OK;
     }
 
-    /* HTTP ошибка — заполняем err, если ещё не заполнено */
     if (perr != NULL) {
         if (perr->code == S3_OK)
             perr->code = S3_EHTTP;

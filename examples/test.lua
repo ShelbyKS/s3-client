@@ -17,8 +17,7 @@ local fio = require('fio')
 local f = fio.open('payload.txt', {'O_RDONLY'})
 
 local fd = f.fh  -- вот так получаем int fd
-local ok, err = client:put_from_fd('test', 'obj.bin', fd, 0, nil)
+local ok, err = client:put_from_fd('firstbucket', 'obj.txt', fd, 0, nil)
 if not ok then
-    print(string.format('PUT failed: %s (code=%d http=%d)',
-        err.message, err.code, err.http_status))
+    print('PUT failed: ', err.message, '(code= ',  err.code, 'http= ', err.http_status, ')')
 end

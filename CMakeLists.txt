@@ -61,41 +61,47 @@ target_compile_definitions(s3_client
 
 # -------- Tarantool module (Lua-модуль) --------
 if (BUILD_TNT_MODULE)
-  if (NOT TARANTOOL_INCLUDE_DIR)
+    if (NOT TARANTOOL_INCLUDE_DIR)
     message(FATAL_ERROR "Tarantool include dir not found. "
                         "Set TARANTOOL_INCLUDE_DIR or disable BUILD_TNT_MODULE.")
-  endif()
+    endif()
 
-  add_library(tnt_s3 MODULE
-      src/tnt_s3_module.c
-      src/tnt_s3_adapter.c
-  )
+    add_library(tnt_s3 MODULE
+        src/tnt_s3_module.c
+        src/tnt_s3_adapter.c
+    )
 
-  target_include_directories(tnt_s3
-      PRIVATE
-          ${TARANTOOL_INCLUDE_DIR}
-          ${CMAKE_CURRENT_SOURCE_DIR}/include
-  )
+    target_include_directories(tnt_s3
+        PRIVATE
+            ${TARANTOOL_INCLUDE_DIR}
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
 
-  target_link_libraries(tnt_s3
-      PRIVATE
-          s3_client
-          ${TARANTOOL_LIBRARIES}
-  )
+    target_link_libraries(tnt_s3
+        PRIVATE
+            s3_client
+            ${TARANTOOL_LIBRARIES}
+    )
 
-  # Tarantool ожидает модуль без префикса "lib"
-  set_target_properties(tnt_s3 PROPERTIES
-      PREFIX ""          # чтобы получилось s3.so, а не libs3.so
-      OUTPUT_NAME "s3"   # имя модуля require('s3')
-  )
+    # Tarantool ожидает модуль без префикса "lib"
+    set_target_properties(tnt_s3 PROPERTIES
+        PREFIX ""          # чтобы получилось s3.so, а не libs3.so
+        OUTPUT_NAME "s3"   # имя модуля require('s3')
+    )
+
+
+    # macOS: разрешить неразрешённые символы (lua_* подтянет Tarantool при загрузке)
+    if(APPLE)
+        target_link_options(tnt_s3 PRIVATE "-undefined" "dynamic_lookup")
+    endif()
 endif()
 
 # -------- tests (опционально) --------
 if (BUILD_TESTS)
-  enable_testing()
-  add_executable(test_s3_client tests/test_s3_client.c)
-  target_link_libraries(test_s3_client PRIVATE s3_client)
-  add_test(NAME s3_client_tests COMMAND test_s3_client)
+    enable_testing()
+    add_executable(test_s3_client tests/test_s3_client.c)
+    target_link_libraries(test_s3_client PRIVATE s3_client)
+    add_test(NAME s3_client_tests COMMAND test_s3_client)
 endif()
 
 # -------- examples (опционально) --------

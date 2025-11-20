@@ -139,6 +139,17 @@ curl_easy_backend_perform(struct s3_http_backend *backend,
     if (req->method == S3_HTTP_PUT && req->src_fd >= 0) {
         curl_easy_setopt(h, CURLOPT_READFUNCTION, read_from_fd_callback);
         curl_easy_setopt(h, CURLOPT_READDATA, (void*)(intptr_t)req->src_fd);
+
+        if (req->content_length >= 0) {
+            rc = curl_easy_setopt(h, CURLOPT_INFILESIZE_LARGE,
+                                (curl_off_t)req->content_length);
+            if (rc != CURLE_OK) {
+                s3_http_set_error(err, S3_ECURL,
+                                "failed to set CURLOPT_INFILESIZE_LARGE");
+                rc_code = S3_ECURL;
+                goto cleanup;
+            }
+        }
     }
 
     /* Тело (GET) */
@@ -147,7 +158,7 @@ curl_easy_backend_perform(struct s3_http_backend *backend,
         curl_easy_setopt(h, CURLOPT_WRITEDATA, (void*)(intptr_t)req->dst_fd);
     }
 
-        /* ----------------------------------------------------------
+    /* ----------------------------------------------------------
      * AWS SigV4 через CURLOPT_AWS_SIGV4 (если доступно в libcurl)
      * ---------------------------------------------------------- */
 #ifdef CURLAUTH_AWS_SIGV4

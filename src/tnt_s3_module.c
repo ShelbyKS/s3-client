@@ -32,6 +32,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include <lua.h>
 #include <lauxlib.h>
@@ -126,7 +128,19 @@ lua_s3_push_error(lua_State *L, const struct s3_error_info *err)
 /*
  * client:put_from_fd(bucket, key, fd [, offset [, limit]])
  *
- * offset и limit пока не поддержаны — требуем offset == 0 и limit == nil.
+ * bucket  : string
+ * key     : string
+ * fd      : number (int fd, fio.open(...):fd())
+ * offset  : number (>= 0), по умолчанию 0
+ * limit   : number (>= 0) или nil.
+ *
+ * Семантика:
+ *  - читаем из fd начиная с offset байта;
+ *  - отправляем ровно content_length байт (см. ниже);
+ *
+ * content_length:
+ *  - если limit == nil -> content_length = file_size - offset;
+ *  - если limit >= 0   -> content_length = limit.
  */
 static int
 lua_s3_client_put_from_fd(lua_State *L)
@@ -153,31 +167,79 @@ lua_s3_client_put_from_fd(lua_State *L)
         return 2;
     }
 
-    if (offset != 0) {
+    if (offset < 0) {
         lua_pushnil(L);
         lua_newtable(L);
         lua_pushinteger(L, S3_EINVAL);
         lua_setfield(L, -2, "code");
-        lua_pushstring(L, "offset != 0 is not supported yet");
+        lua_pushstring(L, "offset must be >= 0");
         lua_setfield(L, -2, "message");
         return 2;
     }
 
-    if (limit >= 0) {
-        /* Можно будет поддержать позже через content_length/INFILESIZE_LARGE. */
+    /* Узнаём размер файла, чтобы проверить offset/limit и вычислить длину. */
+    struct stat st;
+    if (fstat(fd, &st) != 0) {
         lua_pushnil(L);
         lua_newtable(L);
         lua_pushinteger(L, S3_EINVAL);
         lua_setfield(L, -2, "code");
-        lua_pushstring(L, "limit is not supported yet (must be nil)");
+        lua_pushfstring(L, "fstat(fd=%d) failed: %s", fd, strerror(errno));
+        lua_setfield(L, -2, "message");
+        return 2;
+    }
+
+    off_t file_size = st.st_size;
+    if (offset > file_size) {
+        lua_pushnil(L);
+        lua_newtable(L);
+        lua_pushinteger(L, S3_EINVAL);
+        lua_setfield(L, -2, "code");
+        lua_pushstring(L, "offset beyond end of file");
+        lua_setfield(L, -2, "message");
+        return 2;
+    }
+
+    size_t content_length = 0;
+    if (limit < 0) {
+        /* limit == nil => шлём до конца файла */
+        content_length = (size_t)(file_size - offset);
+    } else {
+        if (limit < 0) {
+            lua_pushnil(L);
+            lua_newtable(L);
+            lua_pushinteger(L, S3_EINVAL);
+            lua_setfield(L, -2, "code");
+            lua_pushstring(L, "limit must be >= 0");
+            lua_setfield(L, -2, "message");
+            return 2;
+        }
+        if ((off_t)(offset + limit) > file_size) {
+            lua_pushnil(L);
+            lua_newtable(L);
+            lua_pushinteger(L, S3_EINVAL);
+            lua_setfield(L, -2, "code");
+            lua_pushstring(L, "offset + limit is beyond end of file");
+            lua_setfield(L, -2, "message");
+            return 2;
+        }
+        content_length = (size_t)limit;
+    }
+
+    if (content_length == 0) {
+        lua_pushnil(L);
+        lua_newtable(L);
+        lua_pushinteger(L, S3_EINVAL);
+        lua_setfield(L, -2, "code");
+        lua_pushstring(L, "content_length is 0 (nothing to upload)");
         lua_setfield(L, -2, "message");
         return 2;
     }
 
     struct s3_put_params params;
     memset(&params, 0, sizeof(params));
-    params.offset         = 0;  /* пока не поддерживаем смещения внутри fd */
-    params.content_length = 0;  /* 0 => не задавать Content-Length явно */
+    params.offset         = (size_t)offset;
+    params.content_length = content_length;
     params.content_type   = "application/octet-stream";
 
     struct s3_error_info err;

@@ -11,8 +11,7 @@ tnt_s3_put_worker(va_list ap)
     const struct s3_put_params *params = va_arg(ap, const struct s3_put_params *);
     struct s3_error_info *err          = va_arg(ap, struct s3_error_info *);
 
-    int rc = s3_client_put_fd(client, bucket, key, src_fd, params, err);
-    return rc; /* вернётся в coio_call как ssize_t */
+    return (ssize_t)s3_client_put_fd(client, bucket, key, src_fd, params, err);
 }
 
 int

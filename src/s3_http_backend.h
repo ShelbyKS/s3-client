@@ -49,6 +49,13 @@ struct s3_http_request {
 
     /* Будет заполняться бэкендом */
     long http_status;
+
+	/*
+     * Длина тела запроса (для PUT, POST).
+     * -1  => длина неизвестна (curl может решить сам, но S3 обычно не любит).
+     * >=0 => используем как значение для CURLOPT_INFILESIZE_LARGE.
+     */
+    long long content_length;
 };
 
 /*
