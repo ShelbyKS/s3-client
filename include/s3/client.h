@@ -86,6 +86,33 @@ s3_error_code_str(s3_error_code_t code);
 const char *
 s3_error_message(const s3_error_t *err);
 
+
+/*
+ * Флаги настроек клиента.
+ */
+enum {
+    /*
+     * Не ставить AWS SigV4 подпись (для локального MinIO без auth и т.п.).
+     */
+    S3_CLIENT_F_DISABLE_SIGV4          = 1u << 0,
+
+    /*
+     * Не проверять сертификат peer (CURLOPT_SSL_VERIFYPEER=0).
+     */
+    S3_CLIENT_F_SKIP_PEER_VERIFICATION = 1u << 1,
+
+    /*
+     * Не проверять host/hostname (CURLOPT_SSL_VERIFYHOST=0).
+     */
+    S3_CLIENT_F_SKIP_HOSTNAME_VERIF    = 1u << 2,
+
+    /*
+     * Использовать path-style адреса (https://host/bucket/key)
+     * вместо virtual-hosted-style (https://bucket.host/key).
+     */
+    S3_CLIENT_F_FORCE_PATH_STYLE       = 1u << 3,
+};
+
 /*
  * Настройки клиента.
  * Все строки должны жить всё время жизни клиента
@@ -112,10 +139,37 @@ typedef struct s3_client_opts {
     /*
      * Таймауты, флаги на будущее.
      */
-    uint32_t connect_timeout_ms; /* 0 -> значение по умолчанию */
-    uint32_t request_timeout_ms; /* 0 -> значение по умолчанию */
+    uint32_t connect_timeout_ms;         /* 5s -> значение по умолчанию */
+    uint32_t request_timeout_ms;         /* 30s -> значение по умолчанию */
+    uint32_t max_total_connections;      /* 64 -> значение по умолчанию */
+    uint32_t max_connections_per_host;   /* 16 -> значение по умолчанию */
+    uint32_t multi_idle_timeout_ms;      /* 50ms -> значение по умолчанию */
+
+    const char *ca_file;
+    const char *ca_path;
+    const char *proxy;
+
     uint32_t flags;              /* зарезервировано */
 } s3_client_opts_t;
+
+
+#define S3_CLIENT_OPTS_INIT {               \
+    .endpoint = NULL,                       \
+    .region = NULL,                         \
+    .access_key = NULL,                     \
+    .secret_key = NULL,                     \
+    .default_bucket = NULL,                 \
+    .backend = S3_HTTP_BACKEND_EASY,        \
+    .allocator = NULL,                      \
+    .connect_timeout_ms = 0,                \
+    .request_timeout_ms = 0,                \
+    .max_total_connections = 0,             \
+    .max_connections_per_host = 0,          \
+    .ca_file = NULL,                        \
+    .ca_path = NULL,                        \
+    .proxy = NULL,                          \
+    .flags = 0,                             \
+}
 
 typedef struct s3_client s3_client_t;
 

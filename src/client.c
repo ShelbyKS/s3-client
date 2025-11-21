@@ -168,13 +168,21 @@ s3_client_init_defaults(struct s3_client *c, const s3_client_opts_t *opts)
     /* backend уже выбран до этого (при создании) */
     c->backend_type = opts->backend;
 
-    c->connect_timeout_ms = opts->connect_timeout_ms;
-    if (c->connect_timeout_ms == 0)
-        c->connect_timeout_ms = 5000; /* пример дефолта: 5s */
+    c->connect_timeout_ms = opts->connect_timeout_ms > 0 ?
+                            opts->connect_timeout_ms : 5000;
 
-    c->request_timeout_ms = opts->request_timeout_ms;
-    if (c->request_timeout_ms == 0)
-        c->request_timeout_ms = 30000; /* пример дефолта: 30s */
+
+    c->request_timeout_ms = opts->request_timeout_ms > 0 ?
+                            opts->request_timeout_ms : 30000;
+
+    c->max_total_connections = opts->max_total_connections > 0 ?
+                               opts->max_total_connections : 64;
+
+    c->max_connections_per_host = opts->max_connections_per_host > 0 ?
+                                  opts->max_connections_per_host : 16;
+
+    c->multi_idle_timeout_ms = opts->multi_idle_timeout_ms > 0 ?
+                               opts->multi_idle_timeout_ms : 50;
 
     c->flags = opts->flags;
 }
@@ -198,6 +206,9 @@ s3_client_free_strings(struct s3_client *c)
     c->secret_key = NULL;
     c->session_token = NULL;
     c->default_bucket = NULL;
+    c->ca_file = NULL;
+    c->ca_path = NULL;
+    c->proxy = NULL;
 }
 
 s3_error_code_t
@@ -268,6 +279,24 @@ s3_client_new(const s3_client_opts_t *opts,
     if (opts->default_bucket != NULL) {
         c->default_bucket = s3_strdup_a(&c->alloc, opts->default_bucket, err);
         if (c->default_bucket == NULL)
+            goto fail;
+    }
+
+    if (opts->ca_file != NULL) {
+        c->ca_file = s3_strdup_a(&c->alloc, opts->ca_file, err);
+        if (c->ca_file == NULL)
+            goto fail;
+    }
+
+    if (opts->ca_path != NULL) {
+        c->ca_path = s3_strdup_a(&c->alloc, opts->ca_path, err);
+        if (c->ca_path == NULL)
+            goto fail;
+    }
+
+    if (opts->proxy != NULL) {
+        c->proxy = s3_strdup_a(&c->alloc, opts->proxy, err);
+        if (c->proxy == NULL)
             goto fail;
     }
 

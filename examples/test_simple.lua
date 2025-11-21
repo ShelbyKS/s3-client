@@ -22,7 +22,7 @@ assert(client, ('s3.new failed: %s'):format(err and err.message or 'unknown'))
 do
     local fh = io.open('/tmp/test.txt', 'wb')
     assert(fh, 'failed to open /tmp/test.txt for write')
-    fh:write('Hello S3')
+    fh:write('Hello S3 S3')
     fh:close()
 end
 

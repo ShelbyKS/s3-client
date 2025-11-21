@@ -17,15 +17,42 @@ s3_curl_apply_common_opts(s3_easy_handle_t *h)
     s3_client_t *c = h->client;
     CURL *easy = h->easy;
 
-    curl_easy_setopt(easy, CURLOPT_NOSIGNAL, 1L);
-
-    if (c->connect_timeout_ms > 0)
+    if (c->connect_timeout_ms > 0) {
         curl_easy_setopt(easy, CURLOPT_CONNECTTIMEOUT_MS,
                          (long)c->connect_timeout_ms);
+    }
 
-    if (c->request_timeout_ms > 0)
+    if (c->request_timeout_ms > 0) {
+#if LIBCURL_VERSION_NUM >= 0x072000 /* 7.32.0 */
         curl_easy_setopt(easy, CURLOPT_TIMEOUT_MS,
                          (long)c->request_timeout_ms);
+#else
+        curl_easy_setopt(easy, CURLOPT_TIMEOUT,
+                         (long)((c->request_timeout_ms + 999) / 1000));
+#endif
+    }
+
+    if (c->proxy != NULL) {
+        curl_easy_setopt(easy, CURLOPT_PROXY, c->proxy);
+    }
+
+    if (c->ca_file != NULL) {
+        curl_easy_setopt(easy, CURLOPT_CAINFO, c->ca_file);
+    }
+    if (c->ca_path != NULL) {
+        curl_easy_setopt(easy, CURLOPT_CAPATH, c->ca_path);
+    }
+
+
+    if (c->flags & S3_CLIENT_F_SKIP_PEER_VERIFICATION) {
+        curl_easy_setopt(easy, CURLOPT_SSL_VERIFYPEER, 0L);
+    }
+
+    if (c->flags & S3_CLIENT_F_SKIP_HOSTNAME_VERIF) {
+        curl_easy_setopt(easy, CURLOPT_SSL_VERIFYHOST, 0L);
+    }
+
+    curl_easy_setopt(easy, CURLOPT_NOSIGNAL, 1L);
 
     /* FOLLOWLOCATION, SSL verify и прочее можно будет добавить опционально. */
 }

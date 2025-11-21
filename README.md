@@ -23,12 +23,6 @@ s3-tarantool/
 │   │   ├── http_multi.c          # backend на curl_multi (публичный слой)
 │   │   └── http_multi_worker.c   # поток curl_multi_loop + очереди (можно объединить)
 
-│   └── util/
-│       ├── queue.c               # thread-safe очередь для multi backend
-│       ├── queue.h
-│       ├── log.c                 # обёртка над say_* или stderr
-│       └── log.h
-
 └── README.md (опционально)
 
 ```

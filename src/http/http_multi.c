@@ -264,13 +264,18 @@ s3_multi_thread_main(void *arg)
             /* Можно залогировать, но не валимся. */
         }
 
-        /* Ждём событий/таймаута. */
-        int numfds = 0;
-        mc = curl_multi_poll(mb->multi, NULL, 0, 1000, &numfds);
-        (void)mc;
-
         /* Обрабатываем завершённые запросы. */
         s3_multi_backend_process_done(mb);
+
+        if (still_running > 0) {
+            /* Ждём событий/таймаута, но с коротким таймаутом. */
+            int numfds = 0;
+            mc = curl_multi_poll(mb->multi, NULL, 0, mb->base.client->multi_idle_timeout_ms, &numfds);
+            (void)mc;
+
+            /* Ещё раз обработать завершившиеся за время poll. */
+            s3_multi_backend_process_done(mb);
+        }
     }
 
     return NULL;
@@ -490,6 +495,15 @@ s3_http_multi_backend_new(struct s3_client *client, s3_error_t *error)
                      "curl_multi_init failed", 0, 0, 0);
         s3_free(&client->alloc, mb);
         return NULL;
+    }
+
+    if (client->max_total_connections > 0) {
+       curl_multi_setopt(mb->multi, CURLMOPT_MAX_TOTAL_CONNECTIONS,
+                       (long)client->max_total_connections);
+    }
+    if (client->max_connections_per_host > 0) {
+       curl_multi_setopt(mb->multi, CURLMOPT_MAX_HOST_CONNECTIONS,
+                       (long)client->max_connections_per_host);
     }
 
     pthread_mutex_init(&mb->mutex, NULL);

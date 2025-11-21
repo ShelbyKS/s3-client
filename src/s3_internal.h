@@ -67,12 +67,20 @@ struct s3_client {
     char *default_bucket;
 
     /* Таймауты и флаги (уже с подставленными дефолтами). */
-    s3_http_backend_t backend_type;
     uint32_t connect_timeout_ms;
     uint32_t request_timeout_ms;
+    uint32_t max_total_connections;
+    uint32_t max_connections_per_host;
+    uint32_t multi_idle_timeout_ms;
+
+    const char *ca_file;
+    const char *ca_path;
+    const char *proxy;
+
     uint32_t flags;
 
-    /* Конкретная реализация HTTP backend'а. */
+    /* Тип и конкретная реализация HTTP backend'а. */
+	s3_http_backend_t backend_type;
     struct s3_http_backend_impl *backend;
 
     /* Последняя ошибка (для s3_client_last_error). */
