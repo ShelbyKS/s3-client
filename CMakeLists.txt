@@ -1,109 +1,157 @@
-cmake_minimum_required(VERSION 3.15)
+cmake_minimum_required(VERSION 3.10)
 
-project(tnt_s3_client C)
+# Просим CMake быть совместимым минимум с 3.5 (чтобы старые проекты, как small, не падали)
+if (NOT DEFINED CMAKE_POLICY_VERSION_MINIMUM)
+    set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
+endif()
 
-option(BUILD_SHARED_LIBS "Build shared libraries" ON)
-option(BUILD_TNT_MODULE  "Build Tarantool module" ON)
-option(BUILD_TESTS       "Build tests" OFF)
+project(tarantool_s3 C)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
-# Пути к заголовкам
-include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
+# Для модулей/шаредов
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-# -------- libcurl --------
+# --------------------------------------------------------------------
+# Пути к модульным файлам CMake (FindTarantool.cmake и т.п.)
+# --------------------------------------------------------------------
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+
+# --------------------------------------------------------------------
+# Внешние зависимости
+# --------------------------------------------------------------------
+
+# libcurl
 find_package(CURL REQUIRED)
+message(STATUS "Found CURL: ${CURL_LIBRARIES}")
 
-# -------- Tarantool (опционально) --------
-if (BUILD_TNT_MODULE)
-    set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake" ${CMAKE_MODULE_PATH})
+# pthread
+find_package(Threads REQUIRED)
 
-    find_package(PkgConfig REQUIRED)
-    find_package(Tarantool REQUIRED)
+# Tarantool (твоя FindTarantool.cmake)
+find_package(Tarantool REQUIRED)
+message(STATUS "Using Tarantool includes: ${TARANTOOL_INCLUDE_DIRS}")
+message(STATUS "Using Tarantool libs: ${TARANTOOL_LIBRARIES}")
 
-    if (TARANTOOL_FOUND)
-        message(STATUS "Found Tarantool via pkg-config")
-        set(TARANTOOL_INCLUDE_DIR ${TARANTOOL_INCLUDE_DIRS})
-        set(TARANTOOL_LIBRARIES   ${TARANTOOL_LIBRARIES})
-    else()
-        message(STATUS "Tarantool not found via pkg-config. "
-                    "You can set TARANTOOL_INCLUDE_DIR and TARANTOOL_LIBRARIES manually.")
-    endif()
+# --------------------------------------------------------------------
+# Small — bundled
+# Ожидаем, что THIRD_PARTY_SRC_DIR и THIRD_PARTY_BIN_DIR заданы
+# на уровне верхнего CMakeLists или через -D.
+# Например:
+#   -DTHIRD_PARTY_SRC_DIR=${CMAKE_SOURCE_DIR}/third_party
+#   -DTHIRD_PARTY_BIN_DIR=${CMAKE_BINARY_DIR}/third_party
+# --------------------------------------------------------------------
+
+include(FindPackageMessage)  # для find_package_message
+
+if (NOT THIRD_PARTY_SRC_DIR)
+    set(THIRD_PARTY_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party")
 endif()
 
-# -------- Основная библиотека s3_client --------
-set(S3_CLIENT_SOURCES
-    src/s3_env.c
-    src/s3_client.c
-    src/s3_http_backend.c
-    src/s3_curl_easy.c
-    src/s3_signer.c
-    src/s3_error.c
+if (NOT THIRD_PARTY_BIN_DIR)
+    set(THIRD_PARTY_BIN_DIR "${CMAKE_CURRENT_BINARY_DIR}/third_party")
+endif()
+
+# Build bundled Small, но не включаем её тесты/перф в default target "all"
+set(SMALL_EMBEDDED ON)
+add_subdirectory(${THIRD_PARTY_SRC_DIR}/small
+                 ${THIRD_PARTY_BIN_DIR}/small
+                 EXCLUDE_FROM_ALL)
+
+# В CMake small, как правило, объявляет таргет `small` (STATIC).
+# Линкуемся на таргет, а не на путь к .a.
+set(SMALL_LIBRARIES small)
+
+set(SMALL_INCLUDE_DIRS
+    ${THIRD_PARTY_SRC_DIR}/small/include
+    ${THIRD_PARTY_SRC_DIR}/small/third_party
 )
 
-add_library(s3_client SHARED ${S3_CLIENT_SOURCES})
+find_package_message(Small "Using bundled Small"
+    "target: ${SMALL_LIBRARIES};includes: ${SMALL_INCLUDE_DIRS}"
+)
 
-target_include_directories(s3_client
-    PUBLIC
-        ${CMAKE_CURRENT_SOURCE_DIR}/include
+message(STATUS "Using Small libs: ${SMALL_LIBRARIES}")
+message(STATUS "Using Small include dirs: ${SMALL_INCLUDE_DIRS}")
+
+# --------------------------------------------------------------------
+# Общие include’ы
+# --------------------------------------------------------------------
+include_directories(
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${SMALL_INCLUDE_DIRS}
+)
+
+# --------------------------------------------------------------------
+# Библиотека s3_client (ядро)
+# --------------------------------------------------------------------
+add_library(s3_client STATIC
+    src/client.c
+    src/alloc.c
+    src/s3_internal.h          # для IDE, не обязателен как компилируемый
+    src/http/curl_easy_factory.c
+    src/http/http_easy.c
+    src/http/http_multi.c
+    src/http/curl_init.c
 )
 
 target_link_libraries(s3_client
     PUBLIC
         CURL::libcurl
+        Threads::Threads
+    PRIVATE
+        ${SMALL_LIBRARIES}
 )
 
-# Если нужны дефайны (например, версия)
-target_compile_definitions(s3_client
-    PUBLIC S3_CLIENT_VERSION="0.1.0"
+target_include_directories(s3_client
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${SMALL_INCLUDE_DIRS}
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
-# -------- Tarantool module (Lua-модуль) --------
-if (BUILD_TNT_MODULE)
-    if (NOT TARANTOOL_INCLUDE_DIR)
-    message(FATAL_ERROR "Tarantool include dir not found. "
-                        "Set TARANTOOL_INCLUDE_DIR or disable BUILD_TNT_MODULE.")
-    endif()
+# --------------------------------------------------------------------
+# Tarantool Lua module: s3.so
+# --------------------------------------------------------------------
+add_library(s3 MODULE
+    src/tarantool_s3.c
+)
 
-    add_library(tnt_s3 MODULE
-        src/tnt_s3_module.c
-        src/tnt_s3_adapter.c
+target_link_libraries(s3
+    PRIVATE
+        s3_client
+        CURL::libcurl
+        Threads::Threads
+        ${TARANTOOL_LIBRARIES}
+        ${SMALL_LIBRARIES}
+)
+
+target_include_directories(s3
+    PRIVATE
+        ${TARANTOOL_INCLUDE_DIRS}
+        ${SMALL_INCLUDE_DIRS}
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+# Tarantool ожидает модуль без префикса "lib"
+set_target_properties(s3 PROPERTIES
+    PREFIX ""
+    OUTPUT_NAME "s3"
+)
+
+# Для Linux/Unix: модуль без лишних версий
+if (UNIX AND NOT APPLE)
+    set_target_properties(s3 PROPERTIES
+        SUFFIX ".so"
     )
-
-    target_include_directories(tnt_s3
-        PRIVATE
-            ${TARANTOOL_INCLUDE_DIR}
-            ${CMAKE_CURRENT_SOURCE_DIR}/include
-    )
-
-    target_link_libraries(tnt_s3
-        PRIVATE
-            s3_client
-            ${TARANTOOL_LIBRARIES}
-    )
-
-    # Tarantool ожидает модуль без префикса "lib"
-    set_target_properties(tnt_s3 PROPERTIES
-        PREFIX ""          # чтобы получилось s3.so, а не libs3.so
-        OUTPUT_NAME "s3"   # имя модуля require('s3')
-    )
-
-
-    # macOS: разрешить неразрешённые символы (lua_* подтянет Tarantool при загрузке)
-    if(APPLE)
-        target_link_options(tnt_s3 PRIVATE "-undefined" "dynamic_lookup")
-    endif()
 endif()
 
-# -------- tests (опционально) --------
-if (BUILD_TESTS)
-    enable_testing()
-    add_executable(test_s3_client tests/test_s3_client.c)
-    target_link_libraries(test_s3_client PRIVATE s3_client)
-    add_test(NAME s3_client_tests COMMAND test_s3_client)
+# Под macOS позволяем неразрешённые символы (Lua, Tarantool API),
+# они подтянутся из самого процесса Tarantool при require('s3').
+if (APPLE)
+    set_target_properties(s3 PROPERTIES
+        LINK_FLAGS "-undefined dynamic_lookup"
+    )
 endif()
-
-# -------- examples (опционально) --------
-# add_executable(example_simple_get_put examples/simple_get_put.c)
-# target_link_libraries(example_simple_get_put PRIVATE s3_client)
