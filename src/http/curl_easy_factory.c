@@ -216,7 +216,6 @@ s3_curl_apply_sigv4(s3_easy_handle_t *h, s3_error_t *error)
         return err->code;
     }
 
-    printf("\n log require_sigv4: %d \n", c->require_sigv4);
     /*
      * 1) Если SigV4 НЕ требуется, используем обычный Basic Auth.
      */

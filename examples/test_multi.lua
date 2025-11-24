@@ -28,7 +28,7 @@ local CLIENT_BACKEND = 'multi'
 
 local function new_client()
     local client, err = s3.new{
-        endpoint        = 'http://127.0.0.1:9000',
+        endpoint        = 'http://minio:9000',
         region          = 'us-east-1',
         access_key      = 'user',
         secret_key      = '12345678',
@@ -41,6 +41,7 @@ local function new_client()
         max_total_connections    = 64,
         max_connections_per_host = 16,
 		multi_idle_timeout_ms = 10,
+        require_sigv4   = true,
 
         -- Для локального http MinIO TLS можно не трогать
         ca_file = nil,
