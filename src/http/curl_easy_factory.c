@@ -7,6 +7,12 @@
 #include <unistd.h>
 #include <stdio.h>
 
+#ifdef S3_USE_TARANTOOL_CURL
+#  pragma message(">>> using tarantool/curl.h")
+#else
+#  pragma message(">>> using system <curl/curl.h>")
+#endif
+
 /* Общие curl-опции ошибок, таймаутов и т.п. */
 
 static void
@@ -277,7 +283,6 @@ s3_curl_apply_sigv4(s3_easy_handle_t *h, s3_error_t *error)
     /*
      * 2) Здесь c->require_sigv4 == true → пробуем AWS SigV4.
      */
-#ifdef CURLOPT_AWS_SIGV4
     if (c->region == NULL) {
         s3_error_set(err, S3_E_INVALID_ARG,
                      "region must be set for SigV4", 0, 0, 0);
@@ -294,6 +299,12 @@ s3_curl_apply_sigv4(s3_easy_handle_t *h, s3_error_t *error)
     }
 
     CURLcode cc = curl_easy_setopt(h->easy, CURLOPT_AWS_SIGV4, sigv4_param);
+    if (cc == CURLE_UNKNOWN_OPTION) {
+        s3_error_set(err, S3_E_INIT,
+                     "libcurl was built without CURLOPT_AWS_SIGV4 (requires libcurl >= 7.75.0)",
+                     0, 0, (long)cc);
+        return err->code;
+    }
     if (cc != CURLE_OK) {
         s3_error_set(err, S3_E_CURL,
                      curl_easy_strerror(cc), 0, 0, (long)cc);
@@ -352,13 +363,6 @@ s3_curl_apply_sigv4(s3_easy_handle_t *h, s3_error_t *error)
     }
 
     return S3_E_OK;
-#else
-    /* Требуем SigV4, но libcurl его не поддерживает → фатальная ошибка. */
-    s3_error_set(err, S3_E_INIT,
-                 "libcurl was built without CURLOPT_AWS_SIGV4 (requires libcurl >= 7.75.0)",
-                 0, 0, 0);
-    return err->code;
-#endif
 }
 
 /* ----------------- заголовки ----------------- */

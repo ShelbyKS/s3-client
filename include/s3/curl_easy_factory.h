@@ -8,7 +8,8 @@ extern "C" {
 #include <stddef.h>
 #include <sys/types.h>
 // #include <curl/curl.h>
-#include <tarantool/curl.h>
+// #include <tarantool/curl.h>
+#include <s3/curl_compat.h>
 
 #include "s3/client.h"
 

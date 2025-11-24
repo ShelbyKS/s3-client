@@ -10,15 +10,12 @@ RUN apt-get update && \
         build-essential \
         cmake \
         curl \
-        libcurl4-openssl-dev \
         git \
         wget \
         ca-certificates && \
     curl -sL https://tarantool.io/release/2/installer.sh | bash && \
     apt-get install -y tarantool tarantool-dev && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
-
-# В Ubuntu 22.04 системный curl = 7.81.0 → SigV4 есть, ничего собирать не надо
 
 WORKDIR /app
 
