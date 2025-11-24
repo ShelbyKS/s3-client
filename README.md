@@ -22,8 +22,6 @@ s3-tarantool/
 │   │   ├── http_easy.c           # backend на curl_easy
 │   │   └── http_multi.c          # backend на curl_multi
 
-└── README.md
-
 ```
 
 ## Мультиплексирование
