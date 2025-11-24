@@ -18,10 +18,9 @@ s3-tarantool/
 
 │   ├── http/
 │   │   ├── curl_init.c           # curl_global_init / cleanup
-│   │   ├── curl_easy_factory.c   # создание easy handles для GET/PUT, колбэки, URL, headers
-│   │   ├── http_easy.c           # backend на curl_easy (coio_call)
-│   │   ├── http_multi.c          # backend на curl_multi (публичный слой)
-│   │   └── http_multi_worker.c   # поток curl_multi_loop + очереди (можно объединить)
+│   │   ├── curl_easy_factory.c   # создание easy handles, колбэки, URL, headers
+│   │   ├── http_easy.c           # backend на curl_easy
+│   │   └── http_multi.c          # backend на curl_multi
 
 └── README.md (опционально)
 
