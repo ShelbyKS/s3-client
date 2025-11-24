@@ -1,5 +1,3 @@
-/* src/http/http_multi.c */
-
 #include <curl/curl.h>
 #include <pthread.h>
 #include <string.h>
@@ -12,12 +10,11 @@
 #include "s3/curl_easy_factory.h"
 #include "s3/alloc.h"
 
-/* Вперёд-объявление backend'а. */
 typedef struct s3_http_multi_backend s3_http_multi_backend_t;
 
 /*
  * Запрос, который обрабатывается в multi-потоке.
- * Живёт в heap'e, coio-воркер ждёт его completion.
+ * Живёт в heap'e, coio-воркер ждёт его завершения.
  */
 struct s3_multi_req {
     struct s3_multi_req *next;
@@ -55,6 +52,7 @@ struct s3_http_multi_backend {
 };
 
 /* --------- маппинг ошибок --------- */
+/* TODO: сделать общий модуль */
 
 static s3_error_code_t
 s3_http_map_curl_error_multi(CURLcode cc)
@@ -110,7 +108,7 @@ s3_multi_backend_wakeup(s3_http_multi_backend_t *mb)
 }
 
 /*
- * Перенос pending-запросов в CURLM (под мьютексом).
+ * Перенос pending-запросов в CURLM с блокировкой.
  * Здесь можно контролировать максимум inflight, если понадобится.
  */
 static void
@@ -341,8 +339,6 @@ s3_http_multi_submit_and_wait(s3_http_multi_backend_t *mb,
     s3_error_code_t rc = req->code;
 
     free(req);
-
-    /* easy handle больше не нужен. */
     s3_easy_handle_destroy(easy);
 
     return rc;

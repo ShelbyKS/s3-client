@@ -25,6 +25,7 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 # libcurl
 find_package(CURL REQUIRED)
 message(STATUS "Found CURL: ${CURL_LIBRARIES}")
+message(STATUS "CURL include dirs: ${CURL_INCLUDE_DIRS}")
 
 # pthread
 find_package(Threads REQUIRED)
@@ -98,7 +99,8 @@ add_library(s3_client STATIC
 
 target_link_libraries(s3_client
     PUBLIC
-        CURL::libcurl
+        # ${CURL_LIBRARIES}
+        ${TARANTOOL_LIBRARIES}
         Threads::Threads
     PRIVATE
         ${SMALL_LIBRARIES}
@@ -109,6 +111,8 @@ target_include_directories(s3_client
         ${CMAKE_CURRENT_SOURCE_DIR}/include
         ${SMALL_INCLUDE_DIRS}
     PRIVATE
+        # ${CURL_INCLUDE_DIRS}
+        ${TARANTOOL_INCLUDE_DIRS}
         ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
@@ -122,7 +126,7 @@ add_library(s3 MODULE
 target_link_libraries(s3
     PRIVATE
         s3_client
-        CURL::libcurl
+        ${CURL_LIBRARIES}
         Threads::Threads
         ${TARANTOOL_LIBRARIES}
         ${SMALL_LIBRARIES}
@@ -132,6 +136,7 @@ target_include_directories(s3
     PRIVATE
         ${TARANTOOL_INCLUDE_DIRS}
         ${SMALL_INCLUDE_DIRS}
+        ${CURL_INCLUDE_DIRS}
         ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 

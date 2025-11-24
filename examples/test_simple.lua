@@ -5,12 +5,13 @@ local json = require('json')
 local s3 = require('s3')
 
 local client, err = s3.new{
-    endpoint        = 'http://127.0.0.1:9000',
+    endpoint        = 'http://minio:9000',
     region          = 'us-east-1',
     access_key      = 'user',
     secret_key      = '12345678',
     backend         = 'multi',       -- или 'easy'
     default_bucket  = 'firstbucket',
+    require_sigv4   = true,
 }
 
 assert(client, ('s3.new failed: %s'):format(err and err.message or 'unknown'))

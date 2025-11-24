@@ -1,19 +1,41 @@
 services:
- minio:
-   image: minio/minio:latest
-   command: server --console-address ":9001" /data/
-   ports:
-     - "9000:9000"
-     - "9001:9001"
-   environment:
-     MINIO_ROOT_USER: user
-     MINIO_ROOT_PASSWORD: 12345678
-   volumes:
-     - minio-storage:/data
-   healthcheck:
-     test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-     interval: 30s
-     timeout: 20s
-     retries: 3
+  minio:
+    image: minio/minio:latest
+    command: server --console-address ":9001" /data/
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: user
+      MINIO_ROOT_PASSWORD: 12345678
+    volumes:
+      - minio-storage:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+
+  tarantool:
+    build:
+      context: .
+      dockerfile: Dockerfile.ubuntu-tarantool
+    depends_on:
+      - minio
+    working_dir: /app
+    volumes:
+      - ../../:/app
+    command: >
+      bash -lc "
+        rm -rf build &&
+        mkdir -p build &&
+        cd build &&
+        cmake .. &&
+        cmake --build . -- -j$(nproc) &&
+        cd /app/examples &&
+        tarantool test_simple.lua
+      "
+
 volumes:
- minio-storage:
+  minio-storage:

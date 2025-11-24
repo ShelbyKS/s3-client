@@ -8,12 +8,9 @@ extern "C" {
 #include <stdint.h>
 #include <stddef.h>
 
-#include "s3/client.h"  /* s3_client_t, s3_error_t, s3_client_opts_t, s3_http_backend_t */
-#include "s3/alloc.h"   /* s3_allocator_t */
+#include "s3/client.h"
+#include "s3/alloc.h"
 
-/*
- * Вперёд-объявление.
- */
 struct s3_http_backend_impl;
 
 /*
@@ -58,7 +55,6 @@ struct s3_http_backend_impl {
 struct s3_client {
     s3_allocator_t alloc;
 
-    /* Нормализованные строковые настройки (все аллоцированы нашим аллокатором). */
     char *endpoint;
     char *region;
     char *access_key;
@@ -78,6 +74,8 @@ struct s3_client {
     const char *proxy;
 
     uint32_t flags;
+
+    bool require_sigv4;
 
     /* Тип и конкретная реализация HTTP backend'а. */
 	s3_http_backend_t backend_type;

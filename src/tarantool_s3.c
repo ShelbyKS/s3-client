@@ -1,5 +1,3 @@
-/* src/tarantool_s3.c */
-
 #include "s3/client.h"
 
 #include <lua.h>
@@ -21,11 +19,9 @@ l_s3_push_error(lua_State *L, const s3_error_t *err)
 {
     lua_newtable(L);
 
-    /* code: строка, например "S3_E_HTTP". */
     lua_pushstring(L, s3_error_code_str(err->code));
     lua_setfield(L, -2, "code");
 
-    /* message: человекочитаемое описание. */
     lua_pushstring(L, s3_error_message(err));
     lua_setfield(L, -2, "message");
 
@@ -39,7 +35,6 @@ l_s3_push_error(lua_State *L, const s3_error_t *err)
     lua_setfield(L, -2, "os_error");
 }
 
-/* Получить backend из строки "easy"/"multi". */
 static int
 l_s3_parse_backend(lua_State *L, int idx, s3_http_backend_t *out)
 {
@@ -221,6 +216,13 @@ l_s3_new(lua_State *L)
     const char *secret_key = luaL_checkstring(L, -1);
     lua_pop(L, 1);
 
+    lua_getfield(L, 1, "require_sigv4");
+    bool require_sigv4 = false; /* по умолчанию basic auth */
+    if (!lua_isnil(L, -1)) {
+        require_sigv4 = lua_toboolean(L, -1) ? true : false;
+    }
+    lua_pop(L, 1);
+
     /* session_token (опционально) */
     lua_getfield(L, 1, "session_token");
     const char *session_token = NULL;
@@ -254,6 +256,8 @@ l_s3_new(lua_State *L)
         request_timeout_ms = (uint32_t)luaL_checkinteger(L, -1);
     lua_pop(L, 1);
 
+
+
     /* allocator: пока из Lua не прокидываем, используем NULL -> malloc. */
     opts.endpoint = endpoint;
     opts.region = region;
@@ -261,6 +265,7 @@ l_s3_new(lua_State *L)
     opts.secret_key = secret_key;
     opts.session_token = session_token;
     opts.default_bucket = default_bucket;
+    opts.require_sigv4 = require_sigv4;
     opts.backend = backend;
     opts.allocator = NULL;
     opts.connect_timeout_ms = connect_timeout_ms;

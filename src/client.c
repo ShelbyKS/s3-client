@@ -1,11 +1,9 @@
-/* src/client.c */
-
 #include "s3/client.h"
 #include "s3/alloc.h"
 #include "s3_internal.h"
 
-#include <sys/types.h> /* ssize_t */
-#include <string.h>     /* memset, strcpy, strlen */
+#include <sys/types.h>
+#include <string.h>
 #include <errno.h>
 
 #include <tarantool/module.h>
@@ -185,6 +183,7 @@ s3_client_init_defaults(struct s3_client *c, const s3_client_opts_t *opts)
                                opts->multi_idle_timeout_ms : 50;
 
     c->flags = opts->flags;
+    c->require_sigv4 = opts->require_sigv4;
 }
 
 static void
@@ -300,7 +299,6 @@ s3_client_new(const s3_client_opts_t *opts,
             goto fail;
     }
 
-    /* Таймауты и флаги. */
     s3_client_init_defaults(c, opts);
 
     /* Создаём backend. */
@@ -320,6 +318,8 @@ s3_client_new(const s3_client_opts_t *opts,
 
     if (c->backend == NULL)
         goto fail;
+
+    printf("client created. require_sigv4: %d \n", c->require_sigv4);
 
     *out_client = c;
     s3_client_set_error(c, err); /* last_error = OK */
@@ -361,7 +361,7 @@ struct s3_put_task {
     int fd;
     off_t offset;
     size_t size;
-    size_t bytes_written; /* на будущее, если понадобится */
+    size_t bytes_written;
 
     s3_error_t err;
     s3_error_code_t code;
@@ -400,7 +400,7 @@ s3_client_put_fd(s3_client_t *client,
     struct s3_put_task task;
     memset(&task, 0, sizeof(task));
     task.client = client;
-    task.opts = *opts; /* shallow copy опций */
+    task.opts = *opts;
     task.fd = fd;
     task.offset = offset;
     task.size = size;

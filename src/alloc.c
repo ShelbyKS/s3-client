@@ -1,9 +1,7 @@
-/* src/alloc.c */
-
 #include "s3/alloc.h"
 
-#include <stdlib.h>   /* malloc, free, realloc */
-#include <string.h>   /* memcpy */
+#include <stdlib.h>
+#include <string.h>
 
 #include <small/small.h> /* struct small_alloc, smalloc, smfree */
 

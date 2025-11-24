@@ -1,5 +1,3 @@
-/* src/http/http_easy.c */
-
 #include <curl/curl.h>
 #include <errno.h>
 
@@ -7,7 +5,7 @@
 #include "s3/curl_easy_factory.h"
 #include "s3/alloc.h"
 
-#include <string.h> /* memset */
+#include <string.h>
 
 /*
  * Конкретная реализация backend'а на curl_easy.
@@ -209,8 +207,6 @@ static const struct s3_http_backend_vtbl s3_http_easy_vtbl = {
 struct s3_http_backend_impl *
 s3_http_easy_backend_new(struct s3_client *client, s3_error_t *error)
 {
-    (void)error; /* пока ошибок нет, но оставим для будущего (например, curl_global_init) */
-
     s3_error_t local_err = S3_ERROR_INIT;
     s3_error_t *err = error ? error : &local_err;
 

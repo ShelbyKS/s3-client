@@ -1,4 +1,3 @@
-/* src/http/curl_init.c */
 
 #include <curl/curl.h>
 #include <pthread.h>
@@ -22,7 +21,6 @@ s3_curl_do_global_init(void)
     CURLcode cc = curl_global_init(CURL_GLOBAL_DEFAULT);
     if (cc != CURLE_OK) {
         s3_curl_init_result = S3_E_INIT;
-        /* Сохраним сообщение, чтобы отдать его через s3_error_t. */
         const char *msg = curl_easy_strerror(cc);
         size_t n = strlen(msg);
         if (n >= sizeof(s3_curl_init_msg))

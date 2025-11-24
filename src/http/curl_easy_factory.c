@@ -1,13 +1,11 @@
-/* src/http/curl_easy_factory.c */
-
 #include "s3/curl_easy_factory.h"
 #include "s3_internal.h"
 #include "s3/alloc.h"
 
 #include <errno.h>
 #include <string.h>
-#include <unistd.h> /* pread, pwrite */
-#include <stdio.h> /* snprintf */
+#include <unistd.h>
+#include <stdio.h>
 
 /* Общие curl-опции ошибок, таймаутов и т.п. */
 
@@ -54,7 +52,7 @@ s3_curl_apply_common_opts(s3_easy_handle_t *h)
 
     curl_easy_setopt(easy, CURLOPT_NOSIGNAL, 1L);
 
-    /* FOLLOWLOCATION, SSL verify и прочее можно будет добавить опционально. */
+    /* FOLLOWLOCATION, SSL verify и тд */
 }
 
 /* ----------------- read/write callbacks с pread/pwrite ----------------- */
@@ -74,7 +72,7 @@ s3_curl_read_cb(char *ptr, size_t size, size_t nmemb, void *userdata)
 
     size_t remaining = io->size_limit > 0
         ? (io->size_limit - h->read_bytes_total)
-        : buf_size; /* теоретически PUT всегда знает размер, но оставим на будущее */
+        : buf_size;
 
     if (io->size_limit > 0 && remaining == 0)
         return 0;
@@ -114,7 +112,6 @@ s3_curl_write_cb(char *ptr, size_t size, size_t nmemb, void *userdata)
     if (buf_size == 0)
         return 0;
 
-    /* Если задан лимит на размер принимаемых данных — уважим его. */
     size_t remaining = io->size_limit > 0
         ? (io->size_limit - h->write_bytes_total)
         : buf_size;
@@ -204,30 +201,84 @@ s3_curl_apply_sigv4(s3_easy_handle_t *h, s3_error_t *error)
     s3_error_t local_err = S3_ERROR_INIT;
     s3_error_t *err = error ? error : &local_err;
 
-// #ifndef CURLOPT_AWS_SIGV4
-#ifndef CURLAUTH_AWS_SIGV4
-    s3_error_set(err, S3_E_INIT,
-                 "libcurl was built without CURLOPT_AWS_SIGV4 (requires libcurl >= 7.75.0)",
-                 0, 0, 0);
-    return err->code;
-#else
     s3_client_t *c = h->client;
 
     if (c->access_key == NULL || c->secret_key == NULL) {
         s3_error_set(err, S3_E_INVALID_ARG,
-                     "access_key and secret_key must be set for SigV4",
+                     "access_key and secret_key must be set for auth",
                      0, 0, 0);
         return err->code;
     }
 
-    /* Строка для CURLOPT_AWS_SIGV4:
-     *   "aws:amz:<region>:s3"
-     *
-     * region берём из клиента. Если вдруг NULL, можно дефолтнуть, но лучше
-     * считать это ошибкой конфигурации.
+    printf("\n log require_sigv4: %d \n", c->require_sigv4);
+    /*
+     * 1) Если SigV4 НЕ требуется, используем обычный Basic Auth.
      */
-    const char *region = c->region;
-    if (region == NULL) {
+    if (!c->require_sigv4) {
+        size_t ak_len = strlen(c->access_key);
+        size_t sk_len = strlen(c->secret_key);
+
+        size_t cred_len = ak_len + 1 + sk_len + 1;
+        char *cred = (char *)s3_alloc(&c->alloc, cred_len);
+        if (cred == NULL) {
+            s3_error_set(err, S3_E_NOMEM,
+                         "Out of memory building basic auth credentials",
+                         ENOMEM, 0, 0);
+            return err->code;
+        }
+
+        memcpy(cred, c->access_key, ak_len);
+        cred[ak_len] = ':';
+        memcpy(cred + ak_len + 1, c->secret_key, sk_len);
+        cred[cred_len - 1] = '\0';
+
+        CURLcode cc;
+        cc = curl_easy_setopt(h->easy, CURLOPT_HTTPAUTH, CURLAUTH_BASIC);
+        if (cc == CURLE_OK)
+            cc = curl_easy_setopt(h->easy, CURLOPT_USERPWD, cred);
+
+        s3_free(&c->alloc, cred);
+
+        if (cc != CURLE_OK) {
+            s3_error_set(err, S3_E_CURL,
+                         curl_easy_strerror(cc), 0, 0, (long)cc);
+            return err->code;
+        }
+
+        /* x-amz-security-token, если есть session_token */
+        if (c->session_token != NULL) {
+            const char header_prefix[] = "x-amz-security-token: ";
+            size_t hp_len = sizeof(header_prefix) - 1;
+            size_t token_len = strlen(c->session_token);
+
+            size_t total = hp_len + token_len + 1;
+            char *hdr = (char *)s3_alloc(&c->alloc, total);
+            if (hdr == NULL) {
+                s3_error_set(err, S3_E_NOMEM,
+                             "Out of memory building x-amz-security-token header",
+                             ENOMEM, 0, 0);
+                return err->code;
+            }
+
+            memcpy(hdr, header_prefix, hp_len);
+            memcpy(hdr + hp_len, c->session_token, token_len);
+            hdr[total - 1] = '\0';
+
+            h->headers = curl_slist_append(h->headers, hdr);
+            s3_free(&c->alloc, hdr);
+
+            if (h->headers != NULL)
+                curl_easy_setopt(h->easy, CURLOPT_HTTPHEADER, h->headers);
+        }
+
+        return S3_E_OK;
+    }
+
+    /*
+     * 2) Здесь c->require_sigv4 == true → пробуем AWS SigV4.
+     */
+#ifdef CURLOPT_AWS_SIGV4
+    if (c->region == NULL) {
         s3_error_set(err, S3_E_INVALID_ARG,
                      "region must be set for SigV4", 0, 0, 0);
         return err->code;
@@ -235,14 +286,13 @@ s3_curl_apply_sigv4(s3_easy_handle_t *h, s3_error_t *error)
 
     char sigv4_param[128];
     int n = snprintf(sigv4_param, sizeof(sigv4_param),
-                     "aws:amz:%s:s3", region);
+                     "aws:amz:%s:s3", c->region);
     if (n <= 0 || (size_t)n >= sizeof(sigv4_param)) {
         s3_error_set(err, S3_E_INTERNAL,
                      "region string is too long for SigV4 param", 0, 0, 0);
         return err->code;
     }
 
-    /* libcurl копирует строку, поэтому мы можем использовать stack-буфер. */
     CURLcode cc = curl_easy_setopt(h->easy, CURLOPT_AWS_SIGV4, sigv4_param);
     if (cc != CURLE_OK) {
         s3_error_set(err, S3_E_CURL,
@@ -250,14 +300,11 @@ s3_curl_apply_sigv4(s3_easy_handle_t *h, s3_error_t *error)
         return err->code;
     }
 
-    /*
-     * Креды передаются через CURLOPT_USERPWD: "ACCESS_KEY:SECRET_KEY".
-     * Это описано в документации к CURLOPT_AWS_SIGV4. :contentReference[oaicite:0]{index=0}
-     */
+    /* Креды через USERPWD как раньше. */
     size_t ak_len = strlen(c->access_key);
     size_t sk_len = strlen(c->secret_key);
 
-    size_t cred_len = ak_len + 1 + sk_len + 1; /* ':' + '\0' */
+    size_t cred_len = ak_len + 1 + sk_len + 1;
     char *cred = (char *)s3_alloc(&c->alloc, cred_len);
     if (cred == NULL) {
         s3_error_set(err, S3_E_NOMEM,
@@ -271,8 +318,6 @@ s3_curl_apply_sigv4(s3_easy_handle_t *h, s3_error_t *error)
     cred[cred_len - 1] = '\0';
 
     cc = curl_easy_setopt(h->easy, CURLOPT_USERPWD, cred);
-
-    /* libcurl тоже копирует эту строку, поэтому сразу освобождаем. */
     s3_free(&c->alloc, cred);
 
     if (cc != CURLE_OK) {
@@ -281,9 +326,8 @@ s3_curl_apply_sigv4(s3_easy_handle_t *h, s3_error_t *error)
         return err->code;
     }
 
-    /* Временные токены STS → x-amz-security-token */
     if (c->session_token != NULL) {
-        char header_prefix[] = "x-amz-security-token: ";
+        const char header_prefix[] = "x-amz-security-token: ";
         size_t hp_len = sizeof(header_prefix) - 1;
         size_t token_len = strlen(c->session_token);
 
@@ -301,8 +345,6 @@ s3_curl_apply_sigv4(s3_easy_handle_t *h, s3_error_t *error)
         hdr[total - 1] = '\0';
 
         h->headers = curl_slist_append(h->headers, hdr);
-
-        /* Строку hdr можно освободить сразу после append. */
         s3_free(&c->alloc, hdr);
 
         if (h->headers != NULL)
@@ -310,6 +352,12 @@ s3_curl_apply_sigv4(s3_easy_handle_t *h, s3_error_t *error)
     }
 
     return S3_E_OK;
+#else
+    /* Требуем SigV4, но libcurl его не поддерживает → фатальная ошибка. */
+    s3_error_set(err, S3_E_INIT,
+                 "libcurl was built without CURLOPT_AWS_SIGV4 (requires libcurl >= 7.75.0)",
+                 0, 0, 0);
+    return err->code;
 #endif
 }
 
@@ -331,8 +379,6 @@ s3_apply_headers_common(s3_easy_handle_t *h,
         if (n > 0 && (size_t)n < sizeof(buf))
             headers = curl_slist_append(headers, buf);
     }
-
-    /* здесь позже можно добавить ещё заголовки, если нужно */
 
     h->headers = headers;
     if (headers != NULL)
@@ -439,7 +485,6 @@ s3_easy_factory_new_put(s3_client_t *client,
     curl_easy_setopt(h->easy, CURLOPT_READFUNCTION, s3_curl_read_cb);
     curl_easy_setopt(h->easy, CURLOPT_READDATA, h);
 
-    /* Если знаем длину — скажем об этом curl. */
     curl_easy_setopt(h->easy, CURLOPT_INFILESIZE_LARGE,
                      (curl_off_t)io->size_limit);
 

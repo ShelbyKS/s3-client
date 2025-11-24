@@ -5,18 +5,12 @@
 extern "C" {
 #endif
 
-#include <stddef.h>   /* size_t */
-#include <stdint.h>   /* uint32_t, uint64_t */
-#include <sys/types.h> /* off_t */
+#include <stddef.h>
+#include <stdint.h>
+#include <sys/types.h>
+#include <stdbool.h>
 
-#include "s3/alloc.h" /* struct s3_allocator */
-
-/*
- * Версия библиотеки (на будущее, можно использовать в Lua-модуле).
- */
-#define S3_CLIENT_VERSION_MAJOR 0
-#define S3_CLIENT_VERSION_MINOR 1
-#define S3_CLIENT_VERSION_PATCH 0
+#include "s3/alloc.h"
 
 /*
  * Тип HTTP backend'а.
@@ -52,10 +46,7 @@ typedef enum s3_error_code {
     S3_E_INTERNAL,        /* Внутренняя ошибка клиента */
 } s3_error_code_t;
 
-/*
- * Расширенная информация об ошибке.
- * Структура zero-инициализируема.
- */
+
 typedef struct s3_error {
     s3_error_code_t code; /* Всегда совпадает с возвращаемым значением функции */
 
@@ -67,9 +58,6 @@ typedef struct s3_error {
     char message[128];
 } s3_error_t;
 
-/*
- * Удобный инициализатор для локальных переменных.
- */
 #define S3_ERROR_INIT { S3_E_OK, 0, 0, 0, {0} }
 
 /*
@@ -115,8 +103,6 @@ enum {
 
 /*
  * Настройки клиента.
- * Все строки должны жить всё время жизни клиента
- * (или быть статическими/константными).
  */
 typedef struct s3_client_opts {
     const char *endpoint;     /* Например: "https://s3.example.com" */
@@ -127,6 +113,7 @@ typedef struct s3_client_opts {
     const char *session_token;/* Опционально: для временных кредов */
 
     const char *default_bucket; /* Опционально: bucket по умолчанию */
+    bool require_sigv4;         /* Опционально: false по умолчанию */
 
     s3_http_backend_t backend;      /* EASY или MULTI */
 
@@ -136,9 +123,6 @@ typedef struct s3_client_opts {
      */
     const struct s3_allocator *allocator;
 
-    /*
-     * Таймауты, флаги на будущее.
-     */
     uint32_t connect_timeout_ms;         /* 5s -> значение по умолчанию */
     uint32_t request_timeout_ms;         /* 30s -> значение по умолчанию */
     uint32_t max_total_connections;      /* 64 -> значение по умолчанию */
@@ -149,7 +133,7 @@ typedef struct s3_client_opts {
     const char *ca_path;
     const char *proxy;
 
-    uint32_t flags;              /* зарезервировано */
+    uint32_t flags;
 } s3_client_opts_t;
 
 
@@ -159,6 +143,7 @@ typedef struct s3_client_opts {
     .access_key = NULL,                     \
     .secret_key = NULL,                     \
     .default_bucket = NULL,                 \
+    .require_sigv4 = false,                 \
     .backend = S3_HTTP_BACKEND_EASY,        \
     .allocator = NULL,                      \
     .connect_timeout_ms = 0,                \
@@ -259,7 +244,6 @@ s3_client_get_fd(s3_client_t *client,
 
 /*
  * Возвращает последний error клиента (thread/fiber-local внутри клиента).
- * Это необязательная штука: можно не использовать, если и так везде передаёшь s3_error_t.
  *
  * Если err != NULL, структура заполняется.
  * Если у клиента нет сохранённой ошибки, err->code будет S3_E_OK.

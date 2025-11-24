@@ -5,7 +5,7 @@
 extern "C" {
 #endif
 
-#include <stddef.h> /* size_t */
+#include <stddef.h>
 
 /*
  * Абстракция аллокатора.

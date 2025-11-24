@@ -5,12 +5,12 @@
 extern "C" {
 #endif
 
-#include <stddef.h>   /* size_t */
-#include <sys/types.h>/* off_t */
+#include <stddef.h>
+#include <sys/types.h>
+// #include <curl/curl.h>
+#include <tarantool/curl.h>
 
-#include <curl/curl.h>
-
-#include "s3/client.h" /* s3_client_t, s3_put_opts_t, s3_get_opts_t, s3_error_t */
+#include "s3/client.h"
 
 /*
  * Описание I/O для easy-хендла.
