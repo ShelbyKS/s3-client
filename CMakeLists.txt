@@ -91,6 +91,7 @@ add_library(s3_client STATIC
     src/http/http_easy.c
     src/http/http_multi.c
     src/http/curl_init.c
+    src/http/parser.c
 )
 
 # В tarantool-режиме не линкуемся ни с каким libcurl — символы подтянет /usr/bin/tarantool

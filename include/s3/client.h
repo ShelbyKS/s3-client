@@ -244,7 +244,6 @@ s3_client_get_fd(s3_client_t *client,
                  s3_error_t *error);
 
 
-
 /*
  * Опции для CREATE bucket.
  */
@@ -275,16 +274,16 @@ typedef struct s3_object_info {
     /* на будущее: owner, metadata и т.п. */
 } s3_object_info_t;
 
-typedef struct s3_list_result {
+typedef struct s3_list_objects_result {
     s3_object_info_t *objects;
     size_t            count;
 
     /* продолжение (пагинация ListObjectsV2) */
     bool   is_truncated;
     char  *next_continuation_token;
-} s3_list_result_t;
+} s3_list_objects_result_t;
 
-typedef struct s3_list_opts {
+typedef struct s3_list_objects_opts {
     const char *bucket;      /* если NULL — default_bucket */
     const char *prefix;      /* фильтр по префиксу, может быть NULL */
     uint32_t    max_keys;    /* 0 — использовать дефолт сервера */
@@ -293,7 +292,7 @@ typedef struct s3_list_opts {
     const char *continuation_token; /* NULL для первой страницы */
 
     uint32_t flags;          /* на будущее (delimiter, fetch-owner и т.д.) */
-} s3_list_opts_t;
+} s3_list_objects_opts_t;
 
 /*
  * Выполнить ListObjectsV2 и распарсить результат в s3_list_result_t.
@@ -301,15 +300,16 @@ typedef struct s3_list_opts {
  */
 s3_error_code_t
 s3_client_list_objects(s3_client_t *client,
-                       const s3_list_opts_t *opts,
-                       s3_list_result_t *out,
+                       const s3_list_objects_opts_t *opts,
+                       s3_list_objects_result_t *out,
                        s3_error_t *error);
 
 /*
  * Освободить всё, что было выделено внутри s3_list_result_t.
  */
 void
-s3_list_result_destroy(s3_client_t *client, s3_list_result_t *res);
+s3_list_objects_result_destroy(s3_client_t *client, s3_list_objects_result_t *res);
+
 
 /*
  * Возвращает последний error клиента (thread/fiber-local внутри клиента).

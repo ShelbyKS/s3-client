@@ -150,6 +150,13 @@ s3_easy_factory_new_create_bucket(s3_client_t *client,
                                   s3_easy_handle_t **out_handle,
                                   s3_error_t *error);
 
+s3_error_code_t
+s3_easy_factory_new_list_objects(s3_client_t *client,
+                                 const s3_list_objects_opts_t *opts,
+                                 const s3_easy_io_t *io,
+                                 s3_easy_handle_t **out_handle,
+                                 s3_error_t *error);
+
 /*
  * Освобождает s3_easy_handle:
  *   - curl_slist_free_all(headers);

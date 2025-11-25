@@ -287,6 +287,79 @@ s3_build_url(s3_client_t *client,
     return S3_E_OK;
 }
 
+static s3_error_code_t
+s3_build_list_url(s3_client_t *client,
+                  const s3_list_objects_opts_t *opts,
+                  char **out_url,
+                  s3_error_t *error)
+{
+    s3_error_t local_err = S3_ERROR_INIT;
+    s3_error_t *err = error ? error : &local_err;
+
+    const char *endpoint = client->endpoint;
+    const char *bucket = opts->bucket ? opts->bucket : client->default_bucket;
+
+    if (endpoint == NULL || bucket == NULL) {
+        s3_error_set(err, S3_E_INVALID_ARG,
+                     "endpoint and bucket must be set for LIST", 0, 0, 0);
+        return err->code;
+    }
+
+    /* Собираем query для ListObjectsV2. */
+    /* Базовый вид:  <endpoint>/<bucket>?list-type=2[&prefix=...][&max-keys=...][&continuation-token=...] */
+
+    /* Оцениваем размер грубо, с запасом. */
+    size_t endpoint_len = strlen(endpoint);
+    size_t bucket_len = strlen(bucket);
+
+    // TODO: сделать нормально
+    size_t extra = 64; /* под list-type=2 и прочие параметры */
+
+    if (opts->prefix)
+        extra += strlen(opts->prefix) + 16;
+    if (opts->continuation_token)
+        extra += strlen(opts->continuation_token) + 32;
+
+    char *url = (char *)s3_alloc(&client->alloc,
+                                 endpoint_len + 1 + bucket_len + 1 + extra);
+    if (!url) {
+        s3_error_set(err, S3_E_NOMEM,
+                     "Out of memory in s3_build_list_url", ENOMEM, 0, 0);
+        return err->code;
+    }
+
+    size_t pos = 0;
+    memcpy(url, endpoint, endpoint_len);
+    pos = endpoint_len;
+    if (pos > 0 && url[pos - 1] == '/')
+        pos--;
+
+    url[pos++] = '/';
+    memcpy(url + pos, bucket, bucket_len);
+    pos += bucket_len;
+
+    /* начинаем query */
+    url[pos++] = '?';
+    pos += (size_t)sprintf(url + pos, "list-type=2");
+
+    if (opts->prefix && opts->prefix[0] != '\0') {
+        pos += (size_t)sprintf(url + pos, "&prefix=%s", opts->prefix);
+    }
+
+    if (opts->max_keys > 0) {
+        pos += (size_t)sprintf(url + pos, "&max-keys=%u", opts->max_keys);
+    }
+
+    if (opts->continuation_token && opts->continuation_token[0] != '\0') {
+        pos += (size_t)sprintf(url + pos, "&continuation-token=%s",
+                               opts->continuation_token);
+    }
+
+    url[pos] = '\0';
+    *out_url = url;
+    return S3_E_OK;
+}
+
 /* ----------------- AWS SigV4 через CURLOPT_AWS_SIGV4 ----------------- */
 
 static s3_error_code_t
@@ -454,6 +527,7 @@ s3_curl_apply_sigv4(s3_easy_handle_t *h, s3_error_t *error)
 
 /* ----------------- заголовки ----------------- */
 
+//TODO: спилить s3_put_opts_t, сделать хэлпер общим для всех методов или спилить
 static s3_error_code_t
 s3_apply_headers_common(s3_easy_handle_t *h,
                         const s3_put_opts_t *put_opts,
@@ -714,6 +788,68 @@ s3_easy_factory_new_create_bucket(s3_client_t *client,
 
     s3_curl_apply_common_opts(h);
     s3_apply_headers_common(h, NULL, err);
+
+    s3_error_code_t rc2 = s3_curl_apply_sigv4(h, err);
+    if (rc2 != S3_E_OK) {
+        s3_easy_handle_destroy(h);
+        return rc2;
+    }
+
+    *out_handle = h;
+    return S3_E_OK;
+}
+
+s3_error_code_t
+s3_easy_factory_new_list_objects(s3_client_t *client,
+                                 const s3_list_objects_opts_t *opts,
+                                 const s3_easy_io_t *io,
+                                 s3_easy_handle_t **out_handle,
+                                 s3_error_t *error)
+{
+    s3_error_t local_err = S3_ERROR_INIT;
+    s3_error_t *err = error ? error : &local_err;
+
+    if (out_handle == NULL || client == NULL || opts == NULL || io == NULL) {
+        s3_error_set(err, S3_E_INVALID_ARG,
+                     "client, opts, io or out_handle is NULL", 0, 0, 0);
+        return err->code;
+    }
+
+    if (io->kind != S3_IO_MEM || io->u.mem.buf == NULL) {
+        s3_error_set(err, S3_E_INVALID_ARG,
+                     "invalid buf for LIST", 0, 0, 0);
+        return err->code;
+    }
+
+    s3_easy_handle_t *h = s3_easy_handle_alloc(client);
+    if (h == NULL) {
+        s3_error_set(err, S3_E_NOMEM,
+                     "Failed to allocate s3_easy_handle", ENOMEM, 0, 0);
+        return err->code;
+    }
+
+    s3_easy_io_init_none(&h->read_io);
+    s3_easy_io_init_mem(&h->write_io, io->u.mem.buf, 0);
+
+    h->read_bytes_total = 0;
+    h->write_bytes_total = 0;
+
+    char *url = NULL;
+    s3_error_code_t rc = s3_build_list_url(client, opts, &url, err);
+    if (rc != S3_E_OK) {
+        s3_easy_handle_destroy(h);
+        return rc;
+    }
+    h->url = url;
+
+    curl_easy_setopt(h->easy, CURLOPT_URL, url);
+    curl_easy_setopt(h->easy, CURLOPT_HTTPGET, 1L);
+
+    curl_easy_setopt(h->easy, CURLOPT_WRITEFUNCTION, s3_curl_write_cb);
+    curl_easy_setopt(h->easy, CURLOPT_WRITEDATA, h);
+
+    s3_curl_apply_common_opts(h);
+    s3_apply_headers_common(h, NULL, err); /* спец-заголовки не нужны */
 
     s3_error_code_t rc2 = s3_curl_apply_sigv4(h, err);
     if (rc2 != S3_E_OK) {

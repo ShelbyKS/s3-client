@@ -127,6 +127,8 @@ local function run_worker(client, worker_id, payload_path, payload_size, results
 end
 
 local function main()
+    print("--------------------- test_multi [START] --------------------------")
+
     print(string.format('Starting S3 stress test: backend=%s, fibers=%d',
         CLIENT_BACKEND, NUM_FIBERS))
 
@@ -176,6 +178,8 @@ local function main()
     print(string.format('total time: %.3f sec', total_time))
     print(string.format('avg per request (PUT+GET): %.3f ms',
         (total_time / NUM_FIBERS) * 1000))
+
+    print("--------------------- test_multi [FINISHED] --------------------------")
 end
 
 main()

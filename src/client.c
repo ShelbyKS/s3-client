@@ -496,8 +496,8 @@ s3_client_create_bucket_worker(va_list ap)
 
 s3_error_code_t
 s3_client_create_bucket(s3_client_t *client,
-                      const s3_create_bucket_opts_t *opts,
-                      s3_error_t *error)
+                        const s3_create_bucket_opts_t *opts,
+                        s3_error_t *error)
 {
     s3_error_t local_err = S3_ERROR_INIT;
     s3_error_t *err = error ? error : &local_err;
@@ -523,4 +523,84 @@ s3_client_create_bucket(s3_client_t *client,
     *err = task.err;
     s3_client_set_error(client, &task.err);
     return task.code;
+}
+
+
+struct s3_list_objects_task {
+    s3_client_t              *client;
+    s3_list_objects_opts_t     opts;
+    s3_list_objects_result_t  *out;
+
+    s3_error_t         err;
+    s3_error_code_t    code;
+};
+
+static ssize_t
+s3_client_list_objects_worker(va_list ap)
+{
+    struct s3_list_objects_task *t = va_arg(ap, struct s3_list_objects_task *);
+    struct s3_http_backend_impl *b = t->client->backend;
+    t->code = b->vtbl->list_objects(b, &t->opts, t->out, &t->err);
+
+    return 0;
+}
+
+s3_error_code_t
+s3_client_list_objects(s3_client_t *client,
+               const s3_list_objects_opts_t *opts,
+               s3_list_objects_result_t *out,
+               s3_error_t *error)
+{
+    s3_error_t local_err = S3_ERROR_INIT;
+    s3_error_t *err = error ? error : &local_err;
+    s3_error_clear(err);
+
+    if (client == NULL || opts == NULL || out == NULL) {
+        s3_error_set(err, S3_E_INVALID_ARG,
+                     "client, opts or out is NULL in list_objects", 0, 0, 0);
+        if (client != NULL)
+            s3_client_set_error(client, err);
+        return err->code;
+    }
+
+    memset(out, 0, sizeof(*out));
+
+    struct s3_list_objects_task task;
+    memset(&task, 0, sizeof(task));
+    task.client = client;
+    task.opts = *opts;
+    task.out = out;
+    s3_error_clear(&task.err);
+    task.code = S3_E_OK;
+
+    coio_call(s3_client_list_objects_worker, &task);
+
+    *err = task.err;
+    s3_client_set_error(client, &task.err);
+    return task.code;
+}
+
+void
+s3_list_objects_result_destroy(s3_client_t *client, s3_list_objects_result_t *res)
+{
+    if (client == NULL || res == NULL)
+        return;
+
+    s3_allocator_t *a = &client->alloc;
+
+    if (res->objects != NULL) {
+        for (size_t i = 0; i < res->count; i++) {
+            s3_object_info_t *o = &res->objects[i];
+            if (o->key)           s3_free(a, o->key);
+            if (o->etag)          s3_free(a, o->etag);
+            if (o->last_modified) s3_free(a, o->last_modified);
+            if (o->storage_class) s3_free(a, o->storage_class);
+        }
+        s3_free(a, res->objects);
+    }
+
+    if (res->next_continuation_token)
+        s3_free(a, res->next_continuation_token);
+
+    memset(res, 0, sizeof(*res));
 }

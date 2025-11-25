@@ -8,6 +8,7 @@
 
 #include "s3_internal.h"
 #include "s3/curl_easy_factory.h"
+#include "s3/parser.h"
 #include "s3/alloc.h"
 
 typedef struct s3_http_multi_backend s3_http_multi_backend_t;
@@ -428,13 +429,64 @@ s3_http_multi_create_bucket(struct s3_http_backend_impl *backend,
     }
 
     s3_easy_handle_t *h = NULL;
-    s3_error_code_t code =
-        s3_easy_factory_new_create_bucket(client, opts, &h, err);
+    s3_error_code_t code = s3_easy_factory_new_create_bucket(client, opts, &h, err);
     if (code != S3_E_OK)
         return code;
 
-    s3_error_code_t rc =
-        s3_http_multi_submit_and_wait(mb, h, NULL, err);
+    s3_error_code_t rc = s3_http_multi_submit_and_wait(mb, h, NULL, err);
+
+    return rc;
+}
+
+static s3_error_code_t
+s3_http_multi_list_objects(struct s3_http_backend_impl *backend,
+                           const s3_list_objects_opts_t *opts,
+                           s3_list_objects_result_t *out,
+                           s3_error_t *error)
+{
+    s3_http_multi_backend_t *mb = (s3_http_multi_backend_t *)backend;
+    s3_client_t *client = mb->base.client;
+
+    s3_error_t local_err = S3_ERROR_INIT;
+    s3_error_t *err = error ? error : &local_err;
+
+    if (opts == NULL || out == NULL) {
+        s3_error_set(err, S3_E_INVALID_ARG,
+                     "opts or out is NULL for LIST", 0, 0, 0);
+        return err->code;
+    }
+
+    memset(out, 0, sizeof(*out));
+
+    s3_mem_buf_t buf;
+    memset(&buf, 0, sizeof(buf));
+
+    s3_easy_io_t io;
+    s3_easy_io_init_mem(&io, &buf, 0);
+
+    s3_easy_handle_t *h = NULL;
+    s3_error_code_t rc = s3_easy_factory_new_list_objects(client, opts, &io, &h, err);
+    if (rc != S3_E_OK) {
+        return rc;
+    }
+
+    /*
+     * bytes_written нам не нужен (полезные данные в buf.size).
+     */
+    rc = s3_http_multi_submit_and_wait(mb, h, NULL, err);
+
+    if (rc != S3_E_OK) {
+        if (buf.data)
+            s3_free(&client->alloc, buf.data);
+        return rc;
+    }
+
+    const char *xml = buf.data ? buf.data : "";
+
+    rc = s3_parse_list_response(client, xml, out, err);
+
+    if (buf.data)
+        s3_free(&client->alloc, buf.data);
 
     return rc;
 }
@@ -483,6 +535,7 @@ static const struct s3_http_backend_vtbl s3_http_multi_vtbl = {
     .put_fd        = s3_http_multi_put_fd,
     .get_fd        = s3_http_multi_get_fd,
     .create_bucket = s3_http_multi_create_bucket,
+    .list_objects  = s3_http_multi_list_objects,
     .destroy       = s3_http_multi_destroy,
 };
 

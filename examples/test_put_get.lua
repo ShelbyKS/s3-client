@@ -29,6 +29,8 @@ client_multi, err = s3.new{
 
 assert(client_multi, ('s3.new failed multi: %s'):format(err and err.message or 'unknown'))
 
+print("--------------------- test_get_put [START] --------------------------")
+
 for _, client in ipairs({client_easy, client_multi}) do
     ----------------------------------------------------------------------
     -- 1. Пишем тестовый файл и грузим его через put_fd
@@ -92,3 +94,5 @@ for _, client in ipairs({client_easy, client_multi}) do
 
     print('equal:', d1 == d2)
 end
+
+print("--------------------- test_get_put [FINISHED] --------------------------")

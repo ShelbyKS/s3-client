@@ -219,6 +219,150 @@ l_s3_client_create_bucket(lua_State *L)
     return 2;
 }
 
+/*
+ * client:list_objects(bucket, prefix, max_keys, continuation_token) -> result | nil, err
+ *
+ * bucket можно передать nil, тогда будет использоваться default_bucket.
+ * prefix, max_keys, continuation_token — опциональные:
+ *   prefix               — фильтр по префиксу;
+ *   max_keys (integer)   — максимум объектов на странице (0 или nil → дефолт сервера);
+ *   continuation_token   — токен для продолжения пагинации (nil → первая страница).
+ *
+ * При успехе возвращает одну таблицу:
+ * {
+ *   objects = {
+ *     { key = "...", size = <int>, etag = "...",
+ *       last_modified = "...", storage_class = "STANDARD" },
+ *     ...
+ *   },
+ *   is_truncated = <bool>,
+ *   next_continuation_token = <string|nil>,
+ * }
+ *
+ * При ошибке: nil, err_table.
+ */
+static int
+l_s3_client_list_objects(lua_State *L)
+{
+    struct l_s3_client *lc = l_s3_check_client(L, 1);
+    s3_client_t *client = lc->client;
+
+    const char *bucket = NULL;
+    if (!lua_isnoneornil(L, 2))
+        bucket = luaL_checkstring(L, 2);
+
+    const char *prefix = NULL;
+    if (!lua_isnoneornil(L, 3))
+        prefix = luaL_checkstring(L, 3);
+
+    uint32_t max_keys = 0;
+    if (!lua_isnoneornil(L, 4)) {
+        lua_Integer mk = luaL_checkinteger(L, 4);
+        if (mk < 0)
+            mk = 0;
+        max_keys = (uint32_t)mk;
+    }
+
+    const char *continuation_token = NULL;
+    if (!lua_isnoneornil(L, 5))
+        continuation_token = luaL_checkstring(L, 5);
+
+    s3_list_objects_opts_t opts;
+    memset(&opts, 0, sizeof(opts));
+    opts.bucket = bucket;                  /* может быть NULL → default_bucket */
+    opts.prefix = prefix;                  /* может быть NULL */
+    opts.max_keys = max_keys;              /* 0 → дефолт сервера */
+    opts.continuation_token = continuation_token; /* NULL → первая страница */
+    opts.flags = 0;
+
+    s3_list_objects_result_t res;
+    memset(&res, 0, sizeof(res));
+
+    s3_error_t err = S3_ERROR_INIT;
+    s3_error_code_t rc = s3_client_list_objects(client, &opts, &res, &err);
+
+    if (rc != S3_E_OK) {
+        /* На всякий случай подчистим результат, если там что-то успело заполниться. */
+        s3_list_objects_result_destroy(client, &res);
+
+        lua_pushnil(L);
+        l_s3_push_error(L, &err);
+        return 2;
+    }
+
+    /*
+     * Строим Lua-таблицу результата:
+     *
+     * {
+     *   objects = {
+     *     { key = "...", size = 123, etag = "...",
+     *       last_modified = "...", storage_class = "STANDARD" },
+     *     ...
+     *   },
+     *   is_truncated = true/false,
+     *   next_continuation_token = "..." or nil
+     * }
+     */
+
+    lua_newtable(L); /* result */
+
+    /* result.objects */
+    lua_createtable(L, (int)res.count, 0); /* objects array */
+
+    for (size_t i = 0; i < res.count; i++) {
+        s3_object_info_t *o = &res.objects[i];
+
+        lua_createtable(L, 0, 5); /* один объект */
+
+        if (o->key != NULL) {
+            lua_pushstring(L, o->key);
+            lua_setfield(L, -2, "key");
+        }
+
+        lua_pushinteger(L, (lua_Integer)o->size);
+        lua_setfield(L, -2, "size");
+
+        if (o->etag != NULL) {
+            lua_pushstring(L, o->etag);
+            lua_setfield(L, -2, "etag");
+        }
+
+        if (o->last_modified != NULL) {
+            lua_pushstring(L, o->last_modified);
+            lua_setfield(L, -2, "last_modified");
+        }
+
+        if (o->storage_class != NULL) {
+            lua_pushstring(L, o->storage_class);
+            lua_setfield(L, -2, "storage_class");
+        }
+
+        /* objects[i+1] = объект */
+        lua_rawseti(L, -2, (int)i + 1);
+    }
+
+    lua_setfield(L, -2, "objects"); /* result.objects = objects */
+
+    /* result.is_truncated */
+    lua_pushboolean(L, res.is_truncated);
+    lua_setfield(L, -2, "is_truncated");
+
+    /* result.next_continuation_token */
+    if (res.next_continuation_token != NULL) {
+        lua_pushstring(L, res.next_continuation_token);
+    } else {
+        lua_pushnil(L);
+    }
+    lua_setfield(L, -2, "next_continuation_token");
+
+    /* Освобождаем все строки/массив, выделенные клиентским аллокатором. */
+    s3_list_objects_result_destroy(client, &res);
+
+    /* Возвращаем только result, без err. */
+    return 1;
+}
+
+
 /* ---------- s3.new{...} ---------- */
 
 static int
@@ -330,6 +474,7 @@ static const luaL_Reg s3_client_methods[] = {
     { "put_fd",         l_s3_client_put_fd },
     { "get_fd",         l_s3_client_get_fd },
     { "create_bucket",  l_s3_client_create_bucket },
+    { "list_objects",    l_s3_client_list_objects },
     { "close",          l_s3_client_close },
     { "__gc",           l_s3_client_gc },
     { NULL, NULL }

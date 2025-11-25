@@ -3,19 +3,7 @@ package.cpath = '../build/?.dylib;../build/?.so;' .. package.cpath
 local json = require('json')
 local s3 = require('s3')
 
-local function random_string(len)
-    local chars = 'abcdefghijklmnopqrstuvwxyz0123456789'
-    local s = {}
-    for i = 1, len do
-        local r = math.random(#chars)
-        s[i] = chars:sub(r, r)
-    end
-    return table.concat(s)
-end
-
-math.randomseed(os.time())
-
-local client_easy, client_multi, err, ok = nil, nil, nil, nil
+local client_easy, client_multi, err, res = nil, nil, nil, nil
 
 client_easy, err = s3.new{
     endpoint        = 'http://minio:9000',
@@ -38,12 +26,21 @@ client_multi, err = s3.new{
 
 assert(client_multi, ('s3.new failed multi: %s'):format(err and err.message or 'unknown'))
 
-print("--------------------- test_create_bucket [START] --------------------------")
+print("--------------------- test_list_objects [START] --------------------------")
 
 for _, client in ipairs({client_easy, client_multi}) do
-	local bucket = "test-" .. random_string(10)
-	ok, err = client:create_bucket(bucket)
-	print('CREATE_BUCKET :', bucket, ok, err and json.encode(err) or nil)
+	res, err = client:list_objects('firstbucket', nil, 2, nil)
+	if not res then
+    	print('LIST error:', require('yaml').encode(err))
+    	return
+	end
+
+	print('is_truncated:', res.is_truncated)
+	print('next token:', res.next_continuation_token)
+
+	for i, obj in ipairs(res.objects) do
+		print(i, obj.key, obj.size, obj.storage_class, obj.last_modified, obj.etag)
+	end
 end
 
-print("--------------------- test_create_bucket [FINISHED] --------------------------")
+print("--------------------- test_list_objects [FINISHED] --------------------------")

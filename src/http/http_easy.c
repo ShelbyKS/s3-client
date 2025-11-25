@@ -4,6 +4,7 @@
 #include "s3_internal.h"
 #include "s3/curl_easy_factory.h"
 #include "s3/alloc.h"
+#include "s3/parser.h"
 
 #include <string.h>
 
@@ -167,8 +168,8 @@ s3_http_easy_get_fd(struct s3_http_backend_impl *backend,
     if (code != S3_E_OK)
         return code;
 
-    size_t bytes = 0;
-    code = s3_http_easy_perform(h, &bytes, err);
+    size_t bytes_sent = 0;
+    code = s3_http_easy_perform(h, &bytes_sent, err);
 
     if (bytes_written != NULL)
         *bytes_written = h->write_bytes_total;
@@ -205,6 +206,68 @@ s3_http_easy_create_bucket(struct s3_http_backend_impl *backend,
     return code;
 }
 
+static s3_error_code_t
+s3_http_easy_list_objects(struct s3_http_backend_impl *backend,
+                          const s3_list_objects_opts_t *opts,
+                          s3_list_objects_result_t *out,
+                          s3_error_t *error)
+{
+    struct s3_http_easy_backend *eb = (struct s3_http_easy_backend *)backend;
+    s3_client_t *client = eb->base.client;
+
+    s3_error_t local_err = S3_ERROR_INIT;
+    s3_error_t *err = error ? error : &local_err;
+
+    if (opts == NULL) {
+         s3_error_set(err, S3_E_INVALID_ARG,
+                     "opts is NULL for LIST", 0, 0, 0);
+        return err->code;
+    }
+
+    if (opts == NULL || out == NULL) {
+        s3_error_set(err, S3_E_INVALID_ARG,
+                     "opts or out is NULL for LIST", 0, 0, 0);
+        return err->code;
+    }
+
+    memset(out, 0, sizeof(*out));
+
+    /* Буфер для ответа ListObjectsV2. */
+    s3_mem_buf_t buf;
+    memset(&buf, 0, sizeof(buf));
+
+    /* I/O: пишем тело ответа в память. */
+    s3_easy_io_t io;
+    s3_easy_io_init_mem(&io, &buf, 0); /* size_limit = 0 → без ограничения */
+
+    s3_easy_handle_t *h = NULL;
+    s3_error_code_t code = s3_easy_factory_new_list_objects(client, opts, &io, &h, err);
+    if (code != S3_E_OK) {
+        return code;
+    }
+
+    size_t bytes_sent = 0;
+    code = s3_http_easy_perform(h, &bytes_sent, err);
+
+    s3_easy_handle_destroy(h);
+
+    if (code != S3_E_OK) {
+        if (buf.data)
+            s3_free(&client->alloc, buf.data);
+        return code;
+    }
+
+    /* buf.data содержит XML; парсим в s3_list_result_t. */
+    const char *xml = buf.data ? buf.data : "";
+
+    code = s3_parse_list_response(client, xml, out, err);
+
+    if (buf.data)
+        s3_free(&client->alloc, buf.data);
+
+    return code;
+}
+
 /* ----------------- destroy + фабрика backend'а ----------------- */
 
 static void
@@ -226,6 +289,7 @@ static const struct s3_http_backend_vtbl s3_http_easy_vtbl = {
     .put_fd        = s3_http_easy_put_fd,
     .get_fd        = s3_http_easy_get_fd,
     .create_bucket = s3_http_easy_create_bucket,
+    .list_objects  = s3_http_easy_list_objects,
     .destroy       = s3_http_easy_destroy,
 };
 
