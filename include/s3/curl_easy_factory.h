@@ -90,6 +90,12 @@ s3_easy_factory_new_get(s3_client_t *client,
                         s3_easy_handle_t **out_handle,
                         s3_error_t *error);
 
+s3_error_code_t
+s3_easy_factory_new_create_bucket(s3_client_t *client,
+                                  const s3_create_bucket_opts_t *opts,
+                                  s3_easy_handle_t **out_handle,
+                                  s3_error_t *error);
+
 /*
  * Освобождает s3_easy_handle:
  *   - curl_slist_free_all(headers);

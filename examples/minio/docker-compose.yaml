@@ -34,8 +34,9 @@ services:
         cmake .. &&
         cmake --build . -- -j$(nproc) &&
         cd /app/examples &&
-        tarantool test_simple.lua &&
-        tarantool test_multi.lua
+        tarantool test_put_get.lua &&
+        tarantool test_multi.lua &&
+        tarantool test_create_bucket.lua
       "
 
 volumes:

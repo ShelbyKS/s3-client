@@ -206,6 +206,15 @@ typedef struct s3_get_opts {
 } s3_get_opts_t;
 
 /*
+ * Опции для CREATE bucket.
+ */
+typedef struct s3_create_bucket_opts {
+    const char *bucket;  /* обязательный */
+    const char *acl;     /* optional, TODO: "private", "public-read" */
+    uint32_t flags;      /* TODO: region_via_body, object_lock и т.п. */
+} s3_create_bucket_opts_t;
+
+/*
  * PUT: отправка тела из fd.
  *
  * Вызывается из файбера на tx-треде.
@@ -241,6 +250,16 @@ s3_client_get_fd(s3_client_t *client,
                  int fd, off_t offset, size_t max_size,
                  size_t *bytes_written,
                  s3_error_t *error);
+
+/*
+ * Создание бакета.
+ *
+ * bucket — имя бакета обязательно.
+ */
+s3_error_code_t
+s3_client_create_bucket(s3_client_t *client,
+                      const s3_create_bucket_opts_t *opts,
+                      s3_error_t *error);
 
 /*
  * Возвращает последний error клиента (thread/fiber-local внутри клиента).

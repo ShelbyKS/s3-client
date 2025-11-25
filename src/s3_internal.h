@@ -35,6 +35,11 @@ struct s3_http_backend_vtbl {
               size_t *bytes_written,
               s3_error_t *error);
 
+    s3_error_code_t
+    (*create_bucket)(struct s3_http_backend_impl *backend,
+                   const s3_create_bucket_opts_t *opts,
+                   s3_error_t *error);
+
     void
     (*destroy)(struct s3_http_backend_impl *backend);
 };

@@ -186,6 +186,39 @@ l_s3_client_get_fd(lua_State *L)
     return 2;
 }
 
+/*
+ * client:create_bucket(bucket) -> bool, err
+ */
+static int
+l_s3_client_create_bucket(lua_State *L)
+{
+    struct l_s3_client *lc = l_s3_check_client(L, 1);
+    s3_client_t *client = lc->client;
+
+    const char *bucket = NULL;
+    if (!lua_isnoneornil(L, 2))
+        bucket = luaL_checkstring(L, 2);
+
+    // TODO: acl, flags, etc.
+
+    s3_create_bucket_opts_t opts;
+    memset(&opts, 0, sizeof(opts));
+    opts.bucket = bucket;
+
+    s3_error_t err = S3_ERROR_INIT;
+    s3_error_code_t rc =
+        s3_client_create_bucket(client, &opts, &err);
+
+    if (rc == S3_E_OK) {
+        lua_pushboolean(L, 1);
+        return 1;
+    }
+
+    lua_pushboolean(L, 0);
+    l_s3_push_error(L, &err);
+    return 2;
+}
+
 /* ---------- s3.new{...} ---------- */
 
 static int
@@ -294,10 +327,11 @@ l_s3_new(lua_State *L)
 /* ---------- регистрация модуля ---------- */
 
 static const luaL_Reg s3_client_methods[] = {
-    { "put_fd",  l_s3_client_put_fd },
-    { "get_fd",  l_s3_client_get_fd },
-    { "close",   l_s3_client_close },
-    { "__gc",    l_s3_client_gc },
+    { "put_fd",         l_s3_client_put_fd },
+    { "get_fd",         l_s3_client_get_fd },
+    { "create_bucket",  l_s3_client_create_bucket },
+    { "close",          l_s3_client_close },
+    { "__gc",           l_s3_client_gc },
     { NULL, NULL }
 };
 

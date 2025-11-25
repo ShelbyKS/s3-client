@@ -181,6 +181,34 @@ s3_http_easy_get_fd(struct s3_http_backend_impl *backend,
     return code;
 }
 
+static s3_error_code_t
+s3_http_easy_create_bucket(struct s3_http_backend_impl *backend,
+                   const s3_create_bucket_opts_t *opts,
+                   s3_error_t *error)
+{
+    struct s3_http_easy_backend *eb = (struct s3_http_easy_backend *)backend;
+    s3_client_t *client = eb->base.client;
+
+    s3_error_t local_err = S3_ERROR_INIT;
+    s3_error_t *err = error ? error : &local_err;
+
+    if (opts->bucket == NULL || (opts->bucket)[0] == '\0') {
+        s3_error_set(err, S3_E_INVALID_ARG,
+                     "bucket name is empty", 0, 0, 0);
+        return err->code;
+    }
+
+    s3_easy_handle_t *h = NULL;
+    s3_error_code_t code = s3_easy_factory_new_create_bucket(client, opts, &h, err);
+    if (code != S3_E_OK)
+        return code;
+
+    code = s3_http_easy_perform(h, NULL, err);
+    s3_easy_handle_destroy(h);
+
+    return code;
+}
+
 /* ----------------- destroy + фабрика backend'а ----------------- */
 
 static void
@@ -199,9 +227,10 @@ s3_http_easy_destroy(struct s3_http_backend_impl *backend)
 /* vtable для easy backend'а */
 
 static const struct s3_http_backend_vtbl s3_http_easy_vtbl = {
-    .put_fd  = s3_http_easy_put_fd,
-    .get_fd  = s3_http_easy_get_fd,
-    .destroy = s3_http_easy_destroy,
+    .put_fd        = s3_http_easy_put_fd,
+    .get_fd        = s3_http_easy_get_fd,
+    .create_bucket = s3_http_easy_create_bucket,
+    .destroy       = s3_http_easy_destroy,
 };
 
 struct s3_http_backend_impl *

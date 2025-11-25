@@ -319,8 +319,6 @@ s3_client_new(const s3_client_opts_t *opts,
     if (c->backend == NULL)
         goto fail;
 
-    printf("client created. require_sigv4: %d \n", c->require_sigv4);
-
     *out_client = c;
     s3_client_set_error(c, err); /* last_error = OK */
     return S3_E_OK;
@@ -472,6 +470,55 @@ s3_client_get_fd(s3_client_t *client,
 
     if (bytes_written != NULL)
         *bytes_written = task.bytes_written;
+
+    *err = task.err;
+    s3_client_set_error(client, &task.err);
+    return task.code;
+}
+
+struct s3_create_bucket_task {
+    s3_client_t *client;
+    s3_create_bucket_opts_t opts;
+
+    s3_error_t err;
+    s3_error_code_t code;
+};
+
+static ssize_t
+s3_client_create_bucket_worker(va_list ap)
+{
+    struct s3_create_bucket_task *t = va_arg(ap, struct s3_create_bucket_task *);
+    struct s3_http_backend_impl *b = t->client->backend;
+    t->code = b->vtbl->create_bucket(b, &t->opts, &t->err);
+
+    return 0;
+}
+
+s3_error_code_t
+s3_client_create_bucket(s3_client_t *client,
+                      const s3_create_bucket_opts_t *opts,
+                      s3_error_t *error)
+{
+    s3_error_t local_err = S3_ERROR_INIT;
+    s3_error_t *err = error ? error : &local_err;
+    s3_error_clear(err);
+
+    if (client == NULL || opts == NULL) {
+        s3_error_set(err, S3_E_INVALID_ARG,
+                     "client or opts is NULL", 0, 0, 0);
+        if (client != NULL)
+            s3_client_set_error(client, err);
+        return err->code;
+    }
+
+    struct s3_create_bucket_task task;
+    memset(&task, 0, sizeof(task));
+    task.client = client;
+    task.opts = *opts;
+    s3_error_clear(&task.err);
+    task.code = S3_E_OK;
+
+    coio_call(s3_client_create_bucket_worker, &task);
 
     *err = task.err;
     s3_client_set_error(client, &task.err);

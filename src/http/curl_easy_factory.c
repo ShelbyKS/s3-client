@@ -57,8 +57,6 @@ s3_curl_apply_common_opts(s3_easy_handle_t *h)
     }
 
     curl_easy_setopt(easy, CURLOPT_NOSIGNAL, 1L);
-
-    /* FOLLOWLOCATION, SSL verify и тд */
 }
 
 /* ----------------- read/write callbacks с pread/pwrite ----------------- */
@@ -145,54 +143,85 @@ s3_curl_write_cb(char *ptr, size_t size, size_t nmemb, void *userdata)
 
 /* ----------------- построение URL ----------------- */
 
+/*
+ * Построение URL.
+ *
+ * Варианты:
+ *   1) bucket != NULL, key != NULL  →  /bucket/key
+ *   2) bucket != NULL, key == NULL  →  /bucket
+ *
+ * endpoint не должен заканчиватьcя слэшем.
+ */
 static s3_error_code_t
 s3_build_url(s3_client_t *client,
              const char *bucket,
-             const char *key,
+             const char *key,         /* может быть NULL */
              char **out_url,
              s3_error_t *error)
 {
     s3_error_t local_err = S3_ERROR_INIT;
     s3_error_t *err = error ? error : &local_err;
 
-    const char *endpoint = client->endpoint;
+    if (client->endpoint == NULL) {
+        s3_error_set(err, S3_E_INVALID_ARG,
+                     "endpoint must be set", 0, 0, 0);
+        return err->code;
+    }
+
     if (bucket == NULL)
         bucket = client->default_bucket;
 
-    if (endpoint == NULL || bucket == NULL || key == NULL) {
+    if (bucket == NULL) {
         s3_error_set(err, S3_E_INVALID_ARG,
-                     "endpoint, bucket and key must be set", 0, 0, 0);
+                     "bucket must be set", 0, 0, 0);
         return err->code;
     }
 
+    const char *endpoint = client->endpoint;
     size_t endpoint_len = strlen(endpoint);
-    size_t bucket_len = strlen(bucket);
-    size_t key_len = strlen(key);
+    size_t bucket_len   = strlen(bucket);
+    size_t key_len      = key ? strlen(key) : 0;
 
-    /* Пример: "https://host/bucket/key" */
-    /* +2 слэша и '\0'. */
-    size_t need = endpoint_len + 1 + bucket_len + 1 + key_len + 1;
+    /*
+     * Базовый размер: endpoint + "/" + bucket + '\0'
+     */
+    size_t need = endpoint_len + 1 + bucket_len + 1;
+
+    /*
+     * Если есть key: добавляем "/" + key
+     */
+    if (key != NULL)
+        need += 1 + key_len;
 
     char *url = (char *)s3_alloc(&client->alloc, need);
     if (url == NULL) {
-        s3_error_set(err, S3_E_NOMEM, "Out of memory in s3_build_url",
-                     ENOMEM, 0, 0);
+        s3_error_set(err, S3_E_NOMEM,
+                     "Out of memory in s3_build_url", ENOMEM, 0, 0);
         return err->code;
     }
 
-    /* Уберём возможный trailing slash у endpoint. */
     size_t pos = 0;
+
+    /* Копируем endpoint */
     memcpy(url, endpoint, endpoint_len);
     pos = endpoint_len;
+
+    /* Убираем возможный trailing slash у endpoint */
     if (pos > 0 && url[pos - 1] == '/')
         pos--;
 
+    /* "/" + bucket */
     url[pos++] = '/';
     memcpy(url + pos, bucket, bucket_len);
     pos += bucket_len;
-    url[pos++] = '/';
-    memcpy(url + pos, key, key_len);
-    pos += key_len;
+
+    /* Если есть key: "/" + key */
+    if (key != NULL) {
+        url[pos++] = '/';
+        memcpy(url + pos, key, key_len);
+        pos += key_len;
+    }
+
     url[pos] = '\0';
 
     *out_url = url;
@@ -560,6 +589,59 @@ s3_easy_factory_new_get(s3_client_t *client,
     /* Range при необходимости. */
     if (opts->range != NULL)
         curl_easy_setopt(h->easy, CURLOPT_RANGE, opts->range);
+
+    s3_curl_apply_common_opts(h);
+    s3_apply_headers_common(h, NULL, err);
+
+    s3_error_code_t rc2 = s3_curl_apply_sigv4(h, err);
+    if (rc2 != S3_E_OK) {
+        s3_easy_handle_destroy(h);
+        return rc2;
+    }
+
+    *out_handle = h;
+    return S3_E_OK;
+}
+
+s3_error_code_t
+s3_easy_factory_new_create_bucket(s3_client_t *client,
+                                  const s3_create_bucket_opts_t *opts,
+                                  s3_easy_handle_t **out_handle,
+                                  s3_error_t *error)
+{
+    s3_error_t local_err = S3_ERROR_INIT;
+    s3_error_t *err = error ? error : &local_err;
+
+    if (out_handle == NULL || client == NULL || opts == NULL) {
+        s3_error_set(err, S3_E_INVALID_ARG,
+                     "client, opts, io or out_handle is NULL", 0, 0, 0);
+        return err->code;
+    }
+
+    s3_easy_handle_t *h = s3_easy_handle_alloc(client);
+    if (h == NULL) {
+        s3_error_set(err, S3_E_NOMEM,
+                     "Failed to allocate s3_easy_handle", ENOMEM, 0, 0);
+        return err->code;
+    }
+
+    char *url = NULL;
+    s3_error_code_t rc = s3_build_url(client,
+                                      opts->bucket,
+                                      NULL,
+                                      &url, err);
+    if (rc != S3_E_OK) {
+        s3_easy_handle_destroy(h);
+        return rc;
+    }
+
+    /* Сохраняем URL внутри easy-хендла для последующего free. */
+    h->url = url;
+    curl_easy_setopt(h->easy, CURLOPT_URL, url);
+
+    /* PUT без тела. */
+    curl_easy_setopt(h->easy, CURLOPT_UPLOAD, 0L);
+    curl_easy_setopt(h->easy, CURLOPT_CUSTOMREQUEST, "PUT");
 
     s3_curl_apply_common_opts(h);
     s3_apply_headers_common(h, NULL, err);
