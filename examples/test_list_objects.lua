@@ -1,6 +1,5 @@
 package.cpath = '../build/?.dylib;../build/?.so;' .. package.cpath
 
-local json = require('json')
 local s3 = require('s3')
 
 local client_easy, client_multi, err, res = nil, nil, nil, nil
@@ -31,7 +30,7 @@ print("--------------------- test_list_objects [START] -------------------------
 for _, client in ipairs({client_easy, client_multi}) do
 	res, err = client:list_objects('firstbucket', nil, 2, nil)
 	if not res then
-    	print('LIST error:', require('yaml').encode(err))
+    	print('LIST error:', require('json').encode(err))
     	return
 	end
 
