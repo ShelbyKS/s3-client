@@ -190,31 +190,6 @@ typedef struct s3_put_opts {
 } s3_put_opts_t;
 
 /*
- * Опции для GET.
- */
-typedef struct s3_get_opts {
-    const char *bucket;
-    const char *key;          /* Object key (обязателен) */
-
-    /*
-     * HTTP Range, например: "bytes=0-1023".
-     * Если NULL — скачиваем весь объект.
-     */
-    const char *range;
-
-    uint32_t flags;
-} s3_get_opts_t;
-
-/*
- * Опции для CREATE bucket.
- */
-typedef struct s3_create_bucket_opts {
-    const char *bucket;  /* обязательный */
-    const char *acl;     /* optional, TODO: "private", "public-read" */
-    uint32_t flags;      /* TODO: region_via_body, object_lock и т.п. */
-} s3_create_bucket_opts_t;
-
-/*
  * PUT: отправка тела из fd.
  *
  * Вызывается из файбера на tx-треде.
@@ -232,6 +207,23 @@ s3_client_put_fd(s3_client_t *client,
                  const s3_put_opts_t *opts,
                  int fd, off_t offset, size_t size,
                  s3_error_t *error);
+
+
+/*
+ * Опции для GET.
+ */
+typedef struct s3_get_opts {
+    const char *bucket;
+    const char *key;          /* Object key (обязателен) */
+
+    /*
+     * HTTP Range, например: "bytes=0-1023".
+     * Если NULL — скачиваем весь объект.
+     */
+    const char *range;
+
+    uint32_t flags;
+} s3_get_opts_t;
 
 /*
  * GET: приём тела в fd.
@@ -251,6 +243,17 @@ s3_client_get_fd(s3_client_t *client,
                  size_t *bytes_written,
                  s3_error_t *error);
 
+
+
+/*
+ * Опции для CREATE bucket.
+ */
+typedef struct s3_create_bucket_opts {
+    const char *bucket;  /* обязательный */
+    const char *acl;     /* optional, TODO: "private", "public-read" */
+    uint32_t flags;      /* TODO: region_via_body, object_lock и т.п. */
+} s3_create_bucket_opts_t;
+
 /*
  * Создание бакета.
  *
@@ -260,6 +263,53 @@ s3_error_code_t
 s3_client_create_bucket(s3_client_t *client,
                       const s3_create_bucket_opts_t *opts,
                       s3_error_t *error);
+
+
+typedef struct s3_object_info {
+    char    *key;           /* имя объекта */
+    uint64_t size;          /* Content-Length */
+    char    *etag;          /* без кавычек */
+    char    *last_modified; /* ISO8601 строка, как в S3 */
+    char    *storage_class; /* например, "STANDARD" */
+
+    /* на будущее: owner, metadata и т.п. */
+} s3_object_info_t;
+
+typedef struct s3_list_result {
+    s3_object_info_t *objects;
+    size_t            count;
+
+    /* продолжение (пагинация ListObjectsV2) */
+    bool   is_truncated;
+    char  *next_continuation_token;
+} s3_list_result_t;
+
+typedef struct s3_list_opts {
+    const char *bucket;      /* если NULL — default_bucket */
+    const char *prefix;      /* фильтр по префиксу, может быть NULL */
+    uint32_t    max_keys;    /* 0 — использовать дефолт сервера */
+
+    /* пагинация */
+    const char *continuation_token; /* NULL для первой страницы */
+
+    uint32_t flags;          /* на будущее (delimiter, fetch-owner и т.д.) */
+} s3_list_opts_t;
+
+/*
+ * Выполнить ListObjectsV2 и распарсить результат в s3_list_result_t.
+ * Память под строки и массив objects — через allocator клиента.
+ */
+s3_error_code_t
+s3_client_list_objects(s3_client_t *client,
+                       const s3_list_opts_t *opts,
+                       s3_list_result_t *out,
+                       s3_error_t *error);
+
+/*
+ * Освободить всё, что было выделено внутри s3_list_result_t.
+ */
+void
+s3_list_result_destroy(s3_client_t *client, s3_list_result_t *res);
 
 /*
  * Возвращает последний error клиента (thread/fiber-local внутри клиента).

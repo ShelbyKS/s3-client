@@ -365,13 +365,11 @@ s3_http_multi_put_fd(struct s3_http_backend_impl *backend,
     }
 
     s3_easy_io_t io;
-    io.fd = fd;
-    io.offset = offset;
-    io.size_limit = size;
+    s3_easy_io_init_fd(&io, fd, offset, size);
 
     s3_easy_handle_t *h = NULL;
     s3_error_code_t code =
-        s3_easy_factory_new_put(client, opts, &io, &h, err);
+        s3_easy_factory_new_put_fd(client, opts, &io, &h, err);
     if (code != S3_E_OK)
         return code;
 
@@ -398,13 +396,11 @@ s3_http_multi_get_fd(struct s3_http_backend_impl *backend,
     }
 
     s3_easy_io_t io;
-    io.fd = fd;
-    io.offset = offset;
-    io.size_limit = max_size; /* 0 -> без ограничения */
+    s3_easy_io_init_fd(&io, fd, offset, max_size);
 
     s3_easy_handle_t *h = NULL;
     s3_error_code_t code =
-        s3_easy_factory_new_get(client, opts, &io, &h, err);
+        s3_easy_factory_new_get_fd(client, opts, &io, &h, err);
     if (code != S3_E_OK)
         return code;
 

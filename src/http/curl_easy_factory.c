@@ -58,8 +58,31 @@ s3_curl_apply_common_opts(s3_easy_handle_t *h)
 
     curl_easy_setopt(easy, CURLOPT_NOSIGNAL, 1L);
 }
-
 /* ----------------- read/write callbacks с pread/pwrite ----------------- */
+
+static int
+s3_mem_buf_reserve(s3_client_t *c, s3_mem_buf_t *b, size_t need)
+{
+    if (b->capacity >= need)
+        return 0;
+
+    size_t new_cap = b->capacity ? b->capacity * 2 : 8192;
+    while (new_cap < need)
+        new_cap *= 2;
+
+    char *p = (char *)s3_alloc(&c->alloc, new_cap);
+    if (!p)
+        return -1;
+
+    if (b->data) {
+        memcpy(p, b->data, b->size);
+        s3_free(&c->alloc, b->data);
+    }
+
+    b->data = p;
+    b->capacity = new_cap;
+    return 0;
+}
 
 static size_t
 s3_curl_read_cb(char *ptr, size_t size, size_t nmemb, void *userdata)
@@ -67,11 +90,8 @@ s3_curl_read_cb(char *ptr, size_t size, size_t nmemb, void *userdata)
     s3_easy_handle_t *h = (s3_easy_handle_t *)userdata;
     s3_easy_io_t *io = &h->read_io;
 
-    if (io->fd < 0)
-        return 0;
-
     size_t buf_size = size * nmemb;
-    if (buf_size == 0)
+    if (buf_size == 0 || io->kind == S3_IO_NONE)
         return 0;
 
     size_t remaining = io->size_limit > 0
@@ -85,22 +105,35 @@ s3_curl_read_cb(char *ptr, size_t size, size_t nmemb, void *userdata)
     if (io->size_limit > 0 && to_read > remaining)
         to_read = remaining;
 
-    ssize_t rc;
-    do {
-        rc = pread(io->fd, ptr, to_read,
-                   io->offset + (off_t)h->read_bytes_total);
-    } while (rc < 0 && errno == EINTR);
+    switch (io->kind) {
+    case S3_IO_FD: {
+        int fd = io->u.fd.fd;
+        if (fd < 0)
+            return 0;
 
-    if (rc < 0) {
-        /* libcurl воспримет CURLE_READ_ERROR. */
-        return CURL_READFUNC_ABORT;
+        ssize_t rc;
+        do {
+            rc = pread(fd, ptr, to_read,
+                       io->u.fd.offset + (off_t)h->read_bytes_total);
+        } while (rc < 0 && errno == EINTR);
+
+        if (rc < 0) {
+            return CURL_READFUNC_ABORT; /* CURLE_READ_ERROR */
+        }
+        if (rc == 0)
+            return 0;
+
+        h->read_bytes_total += (size_t)rc;
+        return (size_t)rc;
     }
-
-    if (rc == 0)
+    case S3_IO_MEM:
+        /* Пока для PUT из памяти не используем — можно реализовать позже */
         return 0;
 
-    h->read_bytes_total += (size_t)rc;
-    return (size_t)rc;
+    case S3_IO_NONE:
+    default:
+        return 0;
+    }
 }
 
 static size_t
@@ -109,11 +142,8 @@ s3_curl_write_cb(char *ptr, size_t size, size_t nmemb, void *userdata)
     s3_easy_handle_t *h = (s3_easy_handle_t *)userdata;
     s3_easy_io_t *io = &h->write_io;
 
-    if (io->fd < 0)
-        return 0;
-
     size_t buf_size = size * nmemb;
-    if (buf_size == 0)
+    if (buf_size == 0 || io->kind == S3_IO_NONE)
         return 0;
 
     size_t remaining = io->size_limit > 0
@@ -127,18 +157,47 @@ s3_curl_write_cb(char *ptr, size_t size, size_t nmemb, void *userdata)
     if (io->size_limit > 0 && to_write > remaining)
         to_write = remaining;
 
-    ssize_t rc;
-    do {
-        rc = pwrite(io->fd, ptr, to_write,
-                    io->offset + (off_t)h->write_bytes_total);
-    } while (rc < 0 && errno == EINTR);
+    switch (io->kind) {
+    case S3_IO_FD: {
+        int fd = io->u.fd.fd;
+        if (fd < 0)
+            return 0;
 
-    if (rc < 0) {
-        return 0; /* libcurl воспримет это как CURLE_WRITE_ERROR */
+        ssize_t rc;
+        do {
+            rc = pwrite(fd, ptr, to_write,
+                        io->u.fd.offset + (off_t)h->write_bytes_total);
+        } while (rc < 0 && errno == EINTR);
+
+        if (rc < 0) {
+            return 0; /* CURLE_WRITE_ERROR */
+        }
+
+        h->write_bytes_total += (size_t)rc;
+        return (size_t)rc;
     }
+    case S3_IO_MEM: {
+        s3_mem_buf_t *b = io->u.mem.buf;
+        if (!b)
+            return 0;
 
-    h->write_bytes_total += (size_t)rc;
-    return (size_t)rc;
+        s3_client_t *c = h->client;
+        size_t need = b->size + to_write + 1;
+        if (s3_mem_buf_reserve(c, b, need) != 0) {
+            return 0; /* curl воспримет это как CURLE_WRITE_ERROR */
+        }
+
+        memcpy(b->data + b->size, ptr, to_write);
+        b->size += to_write;
+        b->data[b->size] = '\0';
+
+        h->write_bytes_total += to_write;
+        return to_write;
+    }
+    case S3_IO_NONE:
+    default:
+        return 0;
+    }
 }
 
 /* ----------------- построение URL ----------------- */
@@ -463,7 +522,7 @@ s3_easy_handle_destroy(s3_easy_handle_t *h)
 /* ----------------- публичные фабрики PUT/GET ----------------- */
 
 s3_error_code_t
-s3_easy_factory_new_put(s3_client_t *client,
+s3_easy_factory_new_put_fd(s3_client_t *client,
                         const s3_put_opts_t *opts,
                         const s3_easy_io_t *io,
                         s3_easy_handle_t **out_handle,
@@ -478,7 +537,7 @@ s3_easy_factory_new_put(s3_client_t *client,
         return err->code;
     }
 
-    if (io->fd < 0 || io->size_limit == 0) {
+    if (io->kind != S3_IO_FD || io->u.fd.fd < 0 || io->size_limit == 0) {
         s3_error_set(err, S3_E_INVALID_ARG,
                      "invalid fd or size_limit for PUT", 0, 0, 0);
         return err->code;
@@ -491,8 +550,13 @@ s3_easy_factory_new_put(s3_client_t *client,
         return err->code;
     }
 
-    h->read_io = *io;
-    h->write_io.fd = -1;
+    /* Настраиваем I/O: читаем тело из fd, ничего не пишем. */
+    s3_easy_io_init_fd(&h->read_io,
+                       io->u.fd.fd,
+                       io->u.fd.offset,
+                       io->size_limit);
+    s3_easy_io_init_none(&h->write_io);
+
     h->read_bytes_total = 0;
     h->write_bytes_total = 0;
 
@@ -534,7 +598,7 @@ s3_easy_factory_new_put(s3_client_t *client,
 }
 
 s3_error_code_t
-s3_easy_factory_new_get(s3_client_t *client,
+s3_easy_factory_new_get_fd(s3_client_t *client,
                         const s3_get_opts_t *opts,
                         const s3_easy_io_t *io,
                         s3_easy_handle_t **out_handle,
@@ -549,7 +613,7 @@ s3_easy_factory_new_get(s3_client_t *client,
         return err->code;
     }
 
-    if (io->fd < 0) {
+    if (io->kind != S3_IO_FD || io->u.fd.fd < 0) {
         s3_error_set(err, S3_E_INVALID_ARG,
                      "invalid fd for GET", 0, 0, 0);
         return err->code;
@@ -562,8 +626,13 @@ s3_easy_factory_new_get(s3_client_t *client,
         return err->code;
     }
 
-    h->write_io = *io;
-    h->read_io.fd = -1;
+    /* Читаем из сети → пишем в fd. */
+    s3_easy_io_init_fd(&h->write_io,
+                       io->u.fd.fd,
+                       io->u.fd.offset,
+                       io->size_limit); /* 0 => без ограничения */
+    s3_easy_io_init_none(&h->read_io);
+
     h->read_bytes_total = 0;
     h->write_bytes_total = 0;
 
