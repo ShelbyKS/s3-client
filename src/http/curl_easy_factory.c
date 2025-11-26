@@ -287,6 +287,54 @@ s3_build_url(s3_client_t *client,
     return S3_E_OK;
 }
 
+/* Простейший URL-энкодер для query-параметров */
+static int
+s3_url_encode_query(s3_client_t *client, const char *src, char **out, s3_error_t *error)
+{
+    s3_error_t local_err = S3_ERROR_INIT;
+    s3_error_t *err = error ? error : &local_err;
+
+    if (src == NULL) {
+        *out = NULL;
+        return 0;
+    }
+
+    size_t len = strlen(src);
+    /* В худшем случае каждый символ станет %XX → *3 + 1 под '\0'. */
+    size_t max_len = len * 3 + 1;
+
+    char *dst = (char *)s3_alloc(&client->alloc, max_len);
+    if (!dst) {
+        s3_error_set(err, S3_E_NOMEM,
+                     "Out of memory in s3_url_encode_query", ENOMEM, 0, 0);
+        return -1;
+    }
+
+    size_t j = 0;
+    for (size_t i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)src[i];
+
+        /* Разрешённые unreserved-символы по RFC 3986: ALPHA / DIGIT / "-" / "." / "_" / "~" */
+        if ((c >= 'A' && c <= 'Z') ||
+            (c >= 'a' && c <= 'z') ||
+            (c >= '0' && c <= '9') ||
+            c == '-' || c == '.' || c == '_' || c == '~')
+        {
+            dst[j++] = (char)c;
+        } else {
+            /* Всё остальное кодируем как %HH */
+            static const char hex[] = "0123456789ABCDEF";
+            dst[j++] = '%';
+            dst[j++] = hex[(c >> 4) & 0xF];
+            dst[j++] = hex[c & 0xF];
+        }
+    }
+
+    dst[j] = '\0';
+    *out = dst;
+    return 0;
+}
+
 static s3_error_code_t
 s3_build_list_url(s3_client_t *client,
                   const s3_list_objects_opts_t *opts,
@@ -308,24 +356,38 @@ s3_build_list_url(s3_client_t *client,
     /* Собираем query для ListObjectsV2. */
     /* Базовый вид:  <endpoint>/<bucket>?list-type=2[&prefix=...][&max-keys=...][&continuation-token=...] */
 
-    /* Оцениваем размер грубо, с запасом. */
+    /* Закодируем prefix и continuation_token для query-параметров. */
+    char *enc_prefix = NULL;
+    char *enc_token  = NULL;
+
+    if (opts->prefix && opts->prefix[0] != '\0') {
+        if (s3_url_encode_query(client, opts->prefix, &enc_prefix, err) != 0)
+            goto fail;
+    }
+
+    if (opts->continuation_token && opts->continuation_token[0] != '\0') {
+        if (s3_url_encode_query(client, opts->continuation_token,
+                                &enc_token, err) != 0)
+            goto fail;
+    }
+
     size_t endpoint_len = strlen(endpoint);
-    size_t bucket_len = strlen(bucket);
+    size_t bucket_len   = strlen(bucket);
 
     // TODO: сделать нормально
-    size_t extra = 64; /* под list-type=2 и прочие параметры */
+    size_t extra = 64; /* базовый запас под list-type и max-keys */
 
-    if (opts->prefix)
-        extra += strlen(opts->prefix) + 16;
-    if (opts->continuation_token)
-        extra += strlen(opts->continuation_token) + 32;
+    if (enc_prefix)
+        extra += strlen(enc_prefix) + 16;
+    if (enc_token)
+        extra += strlen(enc_token) + 32;
 
     char *url = (char *)s3_alloc(&client->alloc,
                                  endpoint_len + 1 + bucket_len + 1 + extra);
     if (!url) {
         s3_error_set(err, S3_E_NOMEM,
                      "Out of memory in s3_build_list_url", ENOMEM, 0, 0);
-        return err->code;
+        goto fail;
     }
 
     size_t pos = 0;
@@ -338,26 +400,41 @@ s3_build_list_url(s3_client_t *client,
     memcpy(url + pos, bucket, bucket_len);
     pos += bucket_len;
 
-    /* начинаем query */
     url[pos++] = '?';
     pos += (size_t)sprintf(url + pos, "list-type=2");
 
-    if (opts->prefix && opts->prefix[0] != '\0') {
-        pos += (size_t)sprintf(url + pos, "&prefix=%s", opts->prefix);
+    if (enc_prefix) {
+        pos += (size_t)sprintf(url + pos, "&prefix=%s", enc_prefix);
     }
 
     if (opts->max_keys > 0) {
         pos += (size_t)sprintf(url + pos, "&max-keys=%u", opts->max_keys);
     }
 
-    if (opts->continuation_token && opts->continuation_token[0] != '\0') {
-        pos += (size_t)sprintf(url + pos, "&continuation-token=%s",
-                               opts->continuation_token);
+    if (enc_token) {
+        pos += (size_t)sprintf(url + pos, "&continuation-token=%s", enc_token);
     }
 
     url[pos] = '\0';
     *out_url = url;
+
+    /* для отладки оставь printf, если удобно */
+    printf("\n url = %s \n", url);
+
+    if (enc_prefix)
+        s3_free(&client->alloc, enc_prefix);
+    if (enc_token)
+        s3_free(&client->alloc, enc_token);
+
     return S3_E_OK;
+
+fail:
+    if (enc_prefix)
+        s3_free(&client->alloc, enc_prefix);
+    if (enc_token)
+        s3_free(&client->alloc, enc_token);
+    *out_url = NULL;
+    return err->code;
 }
 
 /* ----------------- AWS SigV4 через CURLOPT_AWS_SIGV4 ----------------- */

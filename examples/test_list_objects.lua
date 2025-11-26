@@ -2,7 +2,7 @@ package.cpath = '../build/?.dylib;../build/?.so;' .. package.cpath
 
 local s3 = require('s3')
 
-local client_easy, client_multi, err, res = nil, nil, nil, nil
+local client_easy, client_multi, err = nil, nil, nil
 
 client_easy, err = s3.new{
     endpoint        = 'http://minio:9000',
@@ -27,8 +27,8 @@ assert(client_multi, ('s3.new failed multi: %s'):format(err and err.message or '
 
 print("--------------------- test_list_objects [START] --------------------------")
 
-for _, client in ipairs({client_easy, client_multi}) do
-	res, err = client:list_objects('firstbucket', nil, 2, nil)
+local function get_list_objects(client, bucket, prefix, max_obj, cont_token)
+	local res, err = client:list_objects(bucket, prefix, max_obj, cont_token)
 	if not res then
     	print('LIST error:', require('json').encode(err))
     	return
@@ -39,6 +39,17 @@ for _, client in ipairs({client_easy, client_multi}) do
 
 	for i, obj in ipairs(res.objects) do
 		print(i, obj.key, obj.size, obj.storage_class, obj.last_modified, obj.etag)
+	end
+
+	return res, err
+end
+
+for _, client in ipairs({client_easy, client_multi}) do
+	local res, err = get_list_objects(client, 'firstbucket', nil, 1, nil)
+
+	print('check list with next_continuation_token')
+	if res then
+		get_list_objects(client, 'firstbucket', nil, 1, res.next_continuation_token)
 	end
 end
 
