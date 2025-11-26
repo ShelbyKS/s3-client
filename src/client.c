@@ -604,3 +604,52 @@ s3_list_objects_result_destroy(s3_client_t *client, s3_list_objects_result_t *re
 
     memset(res, 0, sizeof(*res));
 }
+
+struct s3_delete_objects_task {
+    s3_client_t *client;
+    s3_delete_objects_opts_t opts;
+
+    s3_error_t err;
+    s3_error_code_t code;
+};
+
+static ssize_t
+s3_client_delete_objects_worker(va_list ap)
+{
+    struct s3_delete_objects_task *t = va_arg(ap, struct s3_delete_objects_task *);
+    struct s3_http_backend_impl *b = t->client->backend;
+    t->code = b->vtbl->delete_objects(b, &t->opts, &t->err);
+
+    return 0;
+}
+
+s3_error_code_t
+s3_client_delete_objects(s3_client_t *client,
+                         const s3_delete_objects_opts_t *opts,
+                         s3_error_t *error)
+{
+    s3_error_t local_err = S3_ERROR_INIT;
+    s3_error_t *err = error ? error : &local_err;
+    s3_error_clear(err);
+
+    if (client == NULL || opts == NULL ||
+        opts->objects == NULL || opts->count == 0) {
+        s3_error_set(err, S3_E_INVALID_ARG,
+                     "client, opts, objects or count is invalid in delete_objects",
+                     0, 0, 0);
+        return err->code;
+    }
+
+    struct s3_delete_objects_task task;
+    memset(&task, 0, sizeof(task));
+    task.client = client;
+    task.opts   = *opts;       /* копируем саму структуру */
+    s3_error_clear(&task.err);
+    task.code   = S3_E_OK;
+
+    coio_call(s3_client_delete_objects_worker, &task);
+
+    *err = task.err;
+    s3_client_set_error(client, &task.err);
+    return task.code;
+}

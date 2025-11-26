@@ -105,6 +105,11 @@ struct s3_easy_handle {
     /* Внутреннее состояние, чтобы callbacks знали, сколько уже прочитали/написали. */
     size_t read_bytes_total;
     size_t write_bytes_total;
+
+    /* Тело запроса, если мы его сами строим (DELETE, POST, и т.п.) */
+    s3_mem_buf_t owned_body;
+    /* Тело ответа, если хотим его собрать целиком (LIST, DELETE, и т.п.) */
+    s3_mem_buf_t owned_resp;
 };
 
 /*
@@ -156,6 +161,12 @@ s3_easy_factory_new_list_objects(s3_client_t *client,
                                  const s3_easy_io_t *io,
                                  s3_easy_handle_t **out_handle,
                                  s3_error_t *error);
+
+s3_error_code_t
+s3_easy_factory_new_delete_objects(s3_client_t *client,
+                                   const s3_delete_objects_opts_t *opts,
+                                   s3_easy_handle_t **out_handle,
+                                   s3_error_t *error);
 
 /*
  * Освобождает s3_easy_handle:

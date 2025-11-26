@@ -218,12 +218,6 @@ s3_http_easy_list_objects(struct s3_http_backend_impl *backend,
     s3_error_t local_err = S3_ERROR_INIT;
     s3_error_t *err = error ? error : &local_err;
 
-    if (opts == NULL) {
-         s3_error_set(err, S3_E_INVALID_ARG,
-                     "opts is NULL for LIST", 0, 0, 0);
-        return err->code;
-    }
-
     if (opts == NULL || out == NULL) {
         s3_error_set(err, S3_E_INVALID_ARG,
                      "opts or out is NULL for LIST", 0, 0, 0);
@@ -268,6 +262,47 @@ s3_http_easy_list_objects(struct s3_http_backend_impl *backend,
     return code;
 }
 
+static s3_error_code_t
+s3_http_easy_delete_objects(struct s3_http_backend_impl *backend,
+                            const s3_delete_objects_opts_t *opts,
+                            s3_error_t *error)
+{
+    struct s3_http_easy_backend *eb = (struct s3_http_easy_backend *)backend;
+    s3_client_t *client = eb->base.client;  
+
+    s3_error_t local_err = S3_ERROR_INIT;
+    s3_error_t *err = error ? error : &local_err;
+
+    if (opts == NULL || opts->objects == NULL || opts->count == 0) {
+        s3_error_set(err, S3_E_INVALID_ARG,
+                     "empty delete_objects opts", 0, 0, 0);
+        return err->code;
+    }
+
+    s3_easy_handle_t *h = NULL;
+    s3_error_code_t code = s3_easy_factory_new_delete_objects(client, opts, &h, err);
+    if (code != S3_E_OK) {
+        return code;
+    }
+
+    size_t bytes = 0;
+    code = s3_http_easy_perform(h, &bytes, err);
+
+    /* Если нужен разбор ответа — смотрим в h->owned_resp. */
+    if (h->owned_resp.data && h->owned_resp.size > 0) {
+        fprintf(stderr,
+                "[s3] delete_objects resp (%zu bytes):\n%.*s\n",
+                h->owned_resp.size,
+                (int)h->owned_resp.size,
+                h->owned_resp.data);
+        /* Тут можно вызвать s3_try_parse_and_log_error_xml(h->owned_resp.data, h->owned_resp.size, err); */
+    }
+
+    s3_easy_handle_destroy(h);
+
+    return code;
+}
+
 /* ----------------- destroy + фабрика backend'а ----------------- */
 
 static void
@@ -286,11 +321,12 @@ s3_http_easy_destroy(struct s3_http_backend_impl *backend)
 /* vtable для easy backend'а */
 
 static const struct s3_http_backend_vtbl s3_http_easy_vtbl = {
-    .put_fd        = s3_http_easy_put_fd,
-    .get_fd        = s3_http_easy_get_fd,
-    .create_bucket = s3_http_easy_create_bucket,
-    .list_objects  = s3_http_easy_list_objects,
-    .destroy       = s3_http_easy_destroy,
+    .put_fd          = s3_http_easy_put_fd,
+    .get_fd          = s3_http_easy_get_fd,
+    .create_bucket   = s3_http_easy_create_bucket,
+    .list_objects    = s3_http_easy_list_objects,
+    .delete_objects  = s3_http_easy_delete_objects, 
+    .destroy         = s3_http_easy_destroy,
 };
 
 struct s3_http_backend_impl *

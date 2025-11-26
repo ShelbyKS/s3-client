@@ -491,6 +491,44 @@ s3_http_multi_list_objects(struct s3_http_backend_impl *backend,
     return rc;
 }
 
+static s3_error_code_t
+s3_http_multi_delete_objects(struct s3_http_backend_impl *backend,
+                             const s3_delete_objects_opts_t *opts,
+                             s3_error_t *error)
+{
+    s3_http_multi_backend_t *mb = (s3_http_multi_backend_t *)backend;
+    s3_client_t *client = mb->base.client;
+
+    s3_error_t local_err = S3_ERROR_INIT;
+    s3_error_t *err = error ? error : &local_err;
+
+    if (opts == NULL || opts->objects == NULL || opts->count == 0) {
+        s3_error_set(err, S3_E_INVALID_ARG,
+                     "empty delete_objects opts", 0, 0, 0);
+        return err->code;
+    }
+
+    s3_easy_handle_t *h = NULL;
+    s3_error_code_t rc =
+        s3_easy_factory_new_delete_objects(client, opts, &h, err);
+    if (rc != S3_E_OK) {
+        return rc;
+    }
+
+    rc = s3_http_multi_submit_and_wait(mb, h, NULL, err);
+
+    if (h->owned_resp.data && h->owned_resp.size > 0) {
+        fprintf(stderr,
+                "[s3-multi] delete_objects resp (%zu bytes):\n%.*s\n",
+                h->owned_resp.size,
+                (int)h->owned_resp.size,
+                h->owned_resp.data);
+        /* Тут тоже можно вызывать парсер. */
+    }
+
+    return rc;
+}
+
 /* --------- destroy + фабрика backend'а --------- */
 
 static void
@@ -532,11 +570,12 @@ s3_http_multi_destroy(struct s3_http_backend_impl *backend)
 /* vtable для мульти-бекенда */
 
 static const struct s3_http_backend_vtbl s3_http_multi_vtbl = {
-    .put_fd        = s3_http_multi_put_fd,
-    .get_fd        = s3_http_multi_get_fd,
-    .create_bucket = s3_http_multi_create_bucket,
-    .list_objects  = s3_http_multi_list_objects,
-    .destroy       = s3_http_multi_destroy,
+    .put_fd          = s3_http_multi_put_fd,
+    .get_fd          = s3_http_multi_get_fd,
+    .create_bucket   = s3_http_multi_create_bucket,
+    .list_objects    = s3_http_multi_list_objects,
+    .delete_objects  = s3_http_multi_delete_objects,
+    .destroy         = s3_http_multi_destroy,
 };
 
 struct s3_http_backend_impl *

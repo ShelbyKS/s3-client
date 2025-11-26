@@ -311,6 +311,30 @@ void
 s3_list_objects_result_destroy(s3_client_t *client, s3_list_objects_result_t *res);
 
 
+typedef struct s3_delete_object {
+    const char *key;   /* обязательный объектный ключ */
+    const char *version_id; /* необязательный */
+} s3_delete_object_t;
+
+typedef struct s3_delete_objects_opts {
+    const char           *bucket;   /* если NULL — берём default_bucket */
+    const s3_delete_object_t *objects; /* массив ключей */
+    size_t                count;    /* сколько элементов в objects */
+
+    bool                  quiet;    /* <Quiet>true</Quiet> в XML */
+    uint32_t              flags;    /* на будущее */
+} s3_delete_objects_opts_t;
+
+/*
+ * Batch DeleteObjects (POST /bucket?delete) для не-версированного бакета.
+ * Удаляет до N объектов за один HTTP-запрос.
+ */
+s3_error_code_t
+s3_client_delete_objects(s3_client_t *client,
+                         const s3_delete_objects_opts_t *opts,
+                         s3_error_t *error);
+
+
 /*
  * Возвращает последний error клиента (thread/fiber-local внутри клиента).
  *

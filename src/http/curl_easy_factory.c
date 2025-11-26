@@ -6,6 +6,8 @@
 #include <string.h>
 #include <unistd.h>
 #include <stdio.h>
+#include <stddef.h>
+#include <openssl/md5.h>
 
 #ifdef S3_USE_TARANTOOL_CURL
 #  pragma message(">>> using tarantool/curl.h")
@@ -94,22 +96,23 @@ s3_curl_read_cb(char *ptr, size_t size, size_t nmemb, void *userdata)
     if (buf_size == 0 || io->kind == S3_IO_NONE)
         return 0;
 
-    size_t remaining = io->size_limit > 0
-        ? (io->size_limit - h->read_bytes_total)
-        : buf_size;
-
-    if (io->size_limit > 0 && remaining == 0)
-        return 0;
-
-    size_t to_read = buf_size;
-    if (io->size_limit > 0 && to_read > remaining)
-        to_read = remaining;
-
     switch (io->kind) {
     case S3_IO_FD: {
         int fd = io->u.fd.fd;
         if (fd < 0)
             return 0;
+
+        /* Сколько нам ещё можно прочитать с учётом size_limit. */
+        size_t remaining_limit = (io->size_limit > 0)
+            ? (io->size_limit - h->read_bytes_total)
+            : buf_size;
+
+        if (io->size_limit > 0 && remaining_limit == 0)
+            return 0;
+
+        size_t to_read = buf_size;
+        if (io->size_limit > 0 && to_read > remaining_limit)
+            to_read = remaining_limit;
 
         ssize_t rc;
         do {
@@ -118,17 +121,49 @@ s3_curl_read_cb(char *ptr, size_t size, size_t nmemb, void *userdata)
         } while (rc < 0 && errno == EINTR);
 
         if (rc < 0) {
-            return CURL_READFUNC_ABORT; /* CURLE_READ_ERROR */
+            /* libcurl воспримет это как CURLE_READ_ERROR. */
+            return CURL_READFUNC_ABORT;
         }
         if (rc == 0)
-            return 0;
+            return 0; /* EOF */
 
         h->read_bytes_total += (size_t)rc;
         return (size_t)rc;
     }
-    case S3_IO_MEM:
-        /* Пока для PUT из памяти не используем — можно реализовать позже */
-        return 0;
+
+    case S3_IO_MEM: {
+        s3_mem_buf_t *b = io->u.mem.buf;
+        if (b == NULL || b->data == NULL)
+            return 0;
+
+        /* Сколько всего данных у нас есть в буфере. */
+        size_t total = b->size;
+
+        /* Если всё уже отдали → EOF. */
+        if (h->read_bytes_total >= total)
+            return 0;
+
+        size_t remaining_buf = total - h->read_bytes_total;
+
+        /* Учитываем size_limit (если задан). */
+        size_t remaining_limit = (io->size_limit > 0)
+            ? (io->size_limit - h->read_bytes_total)
+            : remaining_buf;
+
+        if (io->size_limit > 0 && remaining_limit == 0)
+            return 0;
+
+        /* Сколько реально копируем в этот вызов. */
+        size_t to_read = buf_size;
+        if (to_read > remaining_buf)
+            to_read = remaining_buf;
+        if (io->size_limit > 0 && to_read > remaining_limit)
+            to_read = remaining_limit;
+
+        memcpy(ptr, b->data + h->read_bytes_total, to_read);
+        h->read_bytes_total += to_read;
+        return to_read;
+    }
 
     case S3_IO_NONE:
     default:
@@ -143,8 +178,14 @@ s3_curl_write_cb(char *ptr, size_t size, size_t nmemb, void *userdata)
     s3_easy_io_t *io = &h->write_io;
 
     size_t buf_size = size * nmemb;
-    if (buf_size == 0 || io->kind == S3_IO_NONE)
+    if (buf_size == 0)
         return 0;
+
+    /* Если вывод никуда не нужно писать — просто "проглатываем" данные. */
+    if (io->kind == S3_IO_NONE) {
+        h->write_bytes_total += buf_size;
+        return buf_size; /* ВСЕ байты приняты → для libcurl это успех */
+    }
 
     size_t remaining = io->size_limit > 0
         ? (io->size_limit - h->write_bytes_total)
@@ -437,6 +478,283 @@ fail:
     return err->code;
 }
 
+/* ----------------- helpers: append в s3_mem_buf_t + XML escape ----------------- */
+
+/*
+ * Добавить произвольный кусок данных в s3_mem_buf_t, с \0 в конце.
+ * По месту расширяет буфер через s3_mem_buf_reserve.
+ */
+static s3_error_code_t
+s3_mem_buf_append(s3_client_t *c, s3_mem_buf_t *b,
+                  const char *data, size_t len,
+                  s3_error_t *err)
+{
+    size_t need = b->size + len + 1; /* +1 под завершающий '\0' */
+    if (s3_mem_buf_reserve(c, b, need) != 0) {
+        s3_error_set(err, S3_E_NOMEM,
+                     "Out of memory in s3_mem_buf_append", ENOMEM, 0, 0);
+        return err->code;
+    }
+
+    memcpy(b->data + b->size, data, len);
+    b->size += len;
+    b->data[b->size] = '\0';
+    return S3_E_OK;
+}
+
+/* Упрощённый макрос для добавления строкового литерала. */
+#define APPEND_STR(c, b, s, err)                                            \
+    do {                                                                    \
+        const char *_s = (s);                                               \
+        size_t _len = strlen(_s);                                           \
+        s3_error_code_t _rc =                                               \
+            s3_mem_buf_append((c), (b), _s, _len, (err));                   \
+        if (_rc != S3_E_OK)                                                 \
+            return _rc;                                                     \
+    } while (0)
+
+/*
+ * Добавить XML-эскейпнутую строку (для Key, VersionId и т.п.).
+ * Эскейпим: &, <, >, " (одинарную кавычку можно не трогать).
+ */
+static s3_error_code_t
+s3_xml_append_escaped(s3_client_t *c, s3_mem_buf_t *b,
+                      const char *s, s3_error_t *err)
+{
+    const char *p = s;
+    while (*p) {
+        const char *chunk_start = p;
+
+        /* Ищем следующий спец-символ. */
+        while (*p &&
+               *p != '&' &&
+               *p != '<' &&
+               *p != '>' &&
+               *p != '"') {
+            p++;
+        }
+
+        /* Добавляем “обычный” кусок как есть. */
+        if (p > chunk_start) {
+            s3_error_code_t rc =
+                s3_mem_buf_append(c, b, chunk_start,
+                                  (size_t)(p - chunk_start), err);
+            if (rc != S3_E_OK)
+                return rc;
+        }
+
+        /* Эскейпим спец-символ (если есть). */
+        if (*p == '\0')
+            break;
+
+        const char *ent = NULL;
+        switch (*p) {
+        case '&': ent = "&amp;";  break;
+        case '<': ent = "&lt;";   break;
+        case '>': ent = "&gt;";   break;
+        case '"': ent = "&quot;"; break;
+        default:
+            ent = "?";
+            break;
+        }
+
+        s3_error_code_t rc =
+            s3_mem_buf_append(c, b, ent, strlen(ent), err);
+        if (rc != S3_E_OK)
+            return rc;
+
+        p++;
+    }
+
+    return S3_E_OK;
+}
+
+/*
+ * Построение XML-тела для Multi-Object Delete.
+ *
+ * Формат (AWS/MinIO совместимый):
+ *
+ * <Delete xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+ *   <Quiet>true|false</Quiet>   <!-- опционально -->
+ *   <Object>
+ *     <Key>...</Key>
+ *     <VersionId>...</VersionId>  <!-- опционально -->
+ *   </Object>
+ *   ...
+ * </Delete>
+ *
+ * Результат складывается в s3_mem_buf_t *buf.
+ * Память берётся из client->alloc через s3_mem_buf_reserve().
+ */
+s3_error_code_t
+s3_build_delete_body(s3_client_t *client,
+                     const s3_delete_objects_opts_t *opts,
+                     s3_mem_buf_t *buf,
+                     s3_error_t *error)
+{
+    s3_error_t local_err = S3_ERROR_INIT;
+    s3_error_t *err = error ? error : &local_err;
+
+    if (client == NULL || opts == NULL || buf == NULL ||
+        opts->objects == NULL || opts->count == 0) {
+        s3_error_set(err, S3_E_INVALID_ARG,
+                     "invalid args in s3_build_delete_body", 0, 0, 0);
+        return err->code;
+    }
+
+    /* Начинаем с пустого буфера, но переиспользуем capacity при наличии. */
+    buf->size = 0;
+    if (buf->data)
+        buf->data[0] = '\0';
+
+    /* Корневой элемент с namespace — обязательно по спецификации. */
+    APPEND_STR(client, buf,
+               "<Delete xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">\n",
+               err);
+
+    /* Quiet (если нужно). */
+    if (opts->quiet) {
+        APPEND_STR(client, buf, "  <Quiet>true</Quiet>\n", err);
+    }
+
+    /* Перебираем объекты. */
+    for (size_t i = 0; i < opts->count; i++) {
+        const s3_delete_object_t *obj = &opts->objects[i];
+
+        if (obj->key == NULL || obj->key[0] == '\0') {
+            s3_error_set(err, S3_E_INVALID_ARG,
+                         "delete_objects: object key is empty", 0, 0, 0);
+            return err->code;
+        }
+
+        APPEND_STR(client, buf, "  <Object>\n    <Key>", err);
+
+        /* Эскейпим key на всякий случай. */
+        s3_error_code_t rc =
+            s3_xml_append_escaped(client, buf, obj->key, err);
+        if (rc != S3_E_OK)
+            return rc;
+
+        APPEND_STR(client, buf, "</Key>\n", err);
+
+        if (obj->version_id && obj->version_id[0] != '\0') {
+            APPEND_STR(client, buf, "    <VersionId>", err);
+            rc = s3_xml_append_escaped(client, buf, obj->version_id, err);
+            if (rc != S3_E_OK)
+                return rc;
+            APPEND_STR(client, buf, "</VersionId>\n", err);
+        }
+
+        APPEND_STR(client, buf, "  </Object>\n", err);
+    }
+
+    APPEND_STR(client, buf, "</Delete>", err);
+
+    return S3_E_OK;
+}
+
+/* helper: строим URL вида endpoint/bucket?delete */
+static s3_error_code_t
+s3_build_delete_url(s3_client_t *client,
+                    const s3_delete_objects_opts_t *opts,
+                    char **out_url,
+                    s3_error_t *error)
+{
+    s3_error_t local_err = S3_ERROR_INIT;
+    s3_error_t *err = error ? error : &local_err;
+
+    const char *endpoint = client->endpoint;
+    const char *bucket = opts->bucket ? opts->bucket : client->default_bucket;
+    if (!endpoint || !bucket) {
+        s3_error_set(err, S3_E_INVALID_ARG,
+                     "endpoint and bucket must be set for DELETE", 0, 0, 0);
+        return err->code;
+    }
+
+    size_t endpoint_len = strlen(endpoint);
+    size_t bucket_len   = strlen(bucket);
+
+    /* endpoint + '/' + bucket + "?delete" + '\0' */
+    size_t need = endpoint_len + 1 + bucket_len + strlen("?delete") + 1;
+
+    char *url = (char *)s3_alloc(&client->alloc, need);
+    if (!url) {
+        s3_error_set(err, S3_E_NOMEM,
+                     "Out of memory in s3_build_delete_url", ENOMEM, 0, 0);
+        return err->code;
+    }
+
+    size_t pos = 0;
+    memcpy(url, endpoint, endpoint_len);
+    pos = endpoint_len;
+    if (pos > 0 && url[pos - 1] == '/')
+        pos--;
+
+    url[pos++] = '/';
+    memcpy(url + pos, bucket, bucket_len);
+    pos += bucket_len;
+
+    memcpy(url + pos, "?delete", strlen("?delete"));
+    pos += strlen("?delete");
+    url[pos] = '\0';
+
+    *out_url = url;
+    return S3_E_OK;
+}
+
+static const char b64_table[] =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    "abcdefghijklmnopqrstuvwxyz"
+    "0123456789+/";
+
+/* TODO: вынести в хэлперы */
+/*
+ * Стандартный Base64 (RFC 4648, без переносов строк).
+ *
+ * Возвращает длину результата или -1, если out_cap недостаточен.
+ */
+int
+s3_base64_encode(const unsigned char *in, size_t in_len,
+                 char *out, size_t out_cap)
+{
+    size_t out_len = 4 * ((in_len + 2) / 3);
+
+    if (out_cap < out_len + 1) /* +1 for '\0' */
+        return -1;
+
+    size_t i = 0;
+    size_t o = 0;
+
+    while (i + 2 < in_len) {
+        unsigned v = (in[i] << 16) | (in[i+1] << 8) | in[i+2];
+        out[o++] = b64_table[(v >> 18) & 0x3F];
+        out[o++] = b64_table[(v >> 12) & 0x3F];
+        out[o++] = b64_table[(v >> 6)  & 0x3F];
+        out[o++] = b64_table[v & 0x3F];
+        i += 3;
+    }
+
+    if (i < in_len) {
+        unsigned v = in[i] << 16;
+        if (i + 1 < in_len)
+            v |= (in[i+1] << 8);
+
+        out[o++] = b64_table[(v >> 18) & 0x3F];
+        out[o++] = b64_table[(v >> 12) & 0x3F];
+
+        if (i + 1 < in_len) {
+            out[o++] = b64_table[(v >> 6) & 0x3F];
+            out[o++] = '=';
+        } else {
+            out[o++] = '=';
+            out[o++] = '=';
+        }
+    }
+
+    out[o] = '\0';
+    return (int)o;
+}
+
 /* ----------------- AWS SigV4 через CURLOPT_AWS_SIGV4 ----------------- */
 
 static s3_error_code_t
@@ -634,8 +952,7 @@ s3_apply_headers_common(s3_easy_handle_t *h,
 static s3_easy_handle_t *
 s3_easy_handle_alloc(s3_client_t *client)
 {
-    s3_easy_handle_t *h = (s3_easy_handle_t *)
-        s3_alloc(&client->alloc, sizeof(*h));
+    s3_easy_handle_t *h = (s3_easy_handle_t *)s3_alloc(&client->alloc, sizeof(*h));
     if (h == NULL)
         return NULL;
 
@@ -665,6 +982,12 @@ s3_easy_handle_destroy(s3_easy_handle_t *h)
 
     if (h->url != NULL && c != NULL)
         s3_free(&c->alloc, h->url);
+
+    if (h->owned_body.data)
+        s3_free(&c->alloc, h->owned_body.data);
+
+    if (h->owned_resp.data)
+        s3_free(&c->alloc, h->owned_resp.data);
 
     if (c != NULL)
         s3_free(&c->alloc, h);
@@ -927,6 +1250,130 @@ s3_easy_factory_new_list_objects(s3_client_t *client,
 
     s3_curl_apply_common_opts(h);
     s3_apply_headers_common(h, NULL, err); /* спец-заголовки не нужны */
+
+    s3_error_code_t rc2 = s3_curl_apply_sigv4(h, err);
+    if (rc2 != S3_E_OK) {
+        s3_easy_handle_destroy(h);
+        return rc2;
+    }
+
+    *out_handle = h;
+    return S3_E_OK;
+}
+
+s3_error_code_t
+s3_easy_factory_new_delete_objects(s3_client_t *client,
+                                   const s3_delete_objects_opts_t *opts,
+                                   s3_easy_handle_t **out_handle,
+                                   s3_error_t *error)
+{
+    s3_error_t local_err = S3_ERROR_INIT;
+    s3_error_t *err = error ? error : &local_err;
+
+    if (client == NULL || opts == NULL || out_handle == NULL) {
+        s3_error_set(err, S3_E_INVALID_ARG,
+                     "client, opts or out_handle is NULL", 0, 0, 0);
+        return err->code;
+    }
+
+    s3_easy_handle_t *h = s3_easy_handle_alloc(client);
+    if (h == NULL) {
+        s3_error_set(err, S3_E_NOMEM,
+                     "Failed to allocate s3_easy_handle", ENOMEM, 0, 0);
+        return err->code;
+    }
+
+    /* Строим XML-тело в h->owned_body. */
+    s3_mem_buf_t *body = &h->owned_body;
+    memset(body, 0, sizeof(*body));
+
+    /* Строим XML-тело в buf. */
+    s3_error_code_t rc = s3_build_delete_body(client, opts, body, err);
+    if (rc != S3_E_OK) {
+        s3_easy_handle_destroy(h);
+        return rc;
+    }
+
+    /* Исходящее тело: читаем XML из памяти. */
+    s3_easy_io_init_mem(&h->read_io, body, body->size);
+
+    /* Входящее тело (ответ): сразу собираем в h->owned_resp. */
+    s3_mem_buf_t *resp = &h->owned_resp;
+    resp->data = NULL;
+    resp->size = 0;
+    resp->capacity = 0;
+    s3_easy_io_init_mem(&h->write_io, resp, 0); /* 0 = без лимита */
+
+    h->read_bytes_total  = 0;
+    h->write_bytes_total = 0;
+
+    /* URL: endpoint/bucket?delete */
+    char *url = NULL;
+    rc = s3_build_delete_url(client, opts, &url, err);
+    if (rc != S3_E_OK) {
+        s3_easy_handle_destroy(h);
+        return rc;
+    }
+    h->url = url;
+
+    curl_easy_setopt(h->easy, CURLOPT_URL, url);
+    curl_easy_setopt(h->easy, CURLOPT_POST, 1L);
+    curl_easy_setopt(h->easy, CURLOPT_READFUNCTION, s3_curl_read_cb);
+    curl_easy_setopt(h->easy, CURLOPT_READDATA, h);
+    curl_easy_setopt(h->easy, CURLOPT_WRITEFUNCTION, s3_curl_write_cb);
+    curl_easy_setopt(h->easy, CURLOPT_WRITEDATA,     h);
+    curl_easy_setopt(h->easy, CURLOPT_POSTFIELDSIZE_LARGE,
+                     (curl_off_t)body->size);
+
+    /* Ответ нам не особо интересен → можно слить в /dev/null, но сейчас
+     * write_cb уже умеет S3_IO_NONE, так что оставляем write_io=NONE. */
+    curl_easy_setopt(h->easy, CURLOPT_WRITEFUNCTION, s3_curl_write_cb);
+    curl_easy_setopt(h->easy, CURLOPT_WRITEDATA, h);
+
+    s3_curl_apply_common_opts(h);
+
+    /* Общие заголовки + Content-Type: application/xml */
+    s3_apply_headers_common(h, NULL, err);
+    if (h->headers == NULL) {
+        /* если apply_headers_common не добавила ничего, всё равно ок */
+    }
+
+    /* TODO: вынести в функцию */
+    /* --- Считаем Content-MD5 для XML тела --- */
+    unsigned char md5_raw[MD5_DIGEST_LENGTH];
+    MD5((const unsigned char *)body->data, body->size, md5_raw);
+
+    /* base64(MD5) → строка для заголовка Content-MD5 */
+    char md5_b64[MD5_DIGEST_LENGTH * 4 / 3 + 4]; /* с запасом под '=' и '\0' */
+    s3_base64_encode(md5_raw, MD5_DIGEST_LENGTH, md5_b64, sizeof(md5_b64));
+
+    char header_md5[128];
+    int n = snprintf(header_md5, sizeof(header_md5),
+                     "Content-MD5: %s", md5_b64);
+    if (n <= 0 || (size_t)n >= sizeof(header_md5)) {
+        s3_error_set(err, S3_E_INTERNAL,
+                     "Content-MD5 header buffer too small", 0, 0, 0);
+        s3_easy_handle_destroy(h);
+        return err->code;
+    }
+    /* --------- */
+
+
+    struct curl_slist *headers = h->headers;
+
+    headers = curl_slist_append(headers, "Content-Type: application/xml");
+    if (headers != NULL) {
+        h->headers = headers;
+        curl_easy_setopt(h->easy, CURLOPT_HTTPHEADER, headers);
+    }
+
+    headers = curl_slist_append(headers, header_md5);
+    if (!headers) {
+        s3_easy_handle_destroy(h);
+        s3_error_set(err, S3_E_NOMEM,
+                     "Failed to append Content-MD5 header", ENOMEM, 0, 0);
+        return err->code;
+    }
 
     s3_error_code_t rc2 = s3_curl_apply_sigv4(h, err);
     if (rc2 != S3_E_OK) {

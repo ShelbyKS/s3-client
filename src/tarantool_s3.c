@@ -4,6 +4,7 @@
 #include <lauxlib.h>
 #include <string.h>
 #include <errno.h>
+#include <stdlib.h>
 
 /* Имя метатабы для клиента. */
 #define S3_LUA_CLIENT_MT "s3_client_mt"
@@ -363,6 +364,107 @@ l_s3_client_list_objects(lua_State *L)
 }
 
 
+/*
+ * client:delete_objects(bucket, keys[, quiet]) -> bool | nil, err
+ *
+ * bucket:
+ *   - строка с именем бакета
+ *   - или nil → будет использован default_bucket клиента
+ *
+ * keys:
+ *   - массив строковых ключей: { "k1", "k2", "k3", ... }
+ *
+ * quiet (опционально):
+ *   - true  → <Quiet>true</Quiet> в XML (сервер не шлёт список успешно удалённых)
+ *   - false / nil → обычный режим
+ */
+static int
+l_s3_client_delete_objects(lua_State *L)
+{
+    struct l_s3_client *lc = l_s3_check_client(L, 1);
+    s3_client_t *client = lc->client;
+
+    /* 2-й аргумент: bucket (может быть nil) */
+    const char *bucket = NULL;
+    if (!lua_isnoneornil(L, 2))
+        bucket = luaL_checkstring(L, 2);
+
+    /* 3-й аргумент: keys (обязательная таблица-массив) */
+    luaL_checktype(L, 3, LUA_TTABLE);
+
+    /* 4-й аргумент: quiet (опционально) */
+    bool quiet = false;
+    if (!lua_isnoneornil(L, 4))
+        quiet = lua_toboolean(L, 4);
+
+    /* Кол-во элементов в таблице keys.
+     * В Tarantool/LuaJIT нет lua_rawlen, используем lua_objlen.
+     */
+    size_t count = lua_objlen(L, 3);
+    if (count == 0) {
+        /* Пустой список — считаем no-op и сразу успех. */
+        lua_pushboolean(L, 1);
+        return 1;
+    }
+
+    /* Массив описаний объектов храним в обычном malloc/free:
+     * он нужен только на время этого вызова и не используется библиотекой
+     * после возврата s3_client_delete_objects.
+     */
+    s3_delete_object_t *objs =
+        (s3_delete_object_t *)malloc(sizeof(*objs) * count);
+    if (objs == NULL) {
+        s3_error_t err = S3_ERROR_INIT;
+        err.code = S3_E_NOMEM;
+        err.os_error = ENOMEM;
+        snprintf(err.message, sizeof(err.message),
+                 "Out of memory in delete_objects");
+
+        lua_pushnil(L);
+        l_s3_push_error(L, &err);
+        return 2;
+    }
+
+    memset(objs, 0, sizeof(*objs) * count);
+
+    /* Заполняем массив из Lua-таблицы:
+     * ключи (строки Lua) живут до конца вызова C-функции, поэтому
+     * можно сохранять указатель (без копирования).
+     */
+    for (size_t i = 0; i < count; i++) {
+        lua_rawgeti(L, 3, (int)(i + 1));  /* keys[i+1] на вершине стека */
+
+        const char *key = luaL_checkstring(L, -1);
+        objs[i].key = key;
+
+        lua_pop(L, 1); /* убираем key со стека */
+    }
+
+    s3_delete_objects_opts_t opts;
+    memset(&opts, 0, sizeof(opts));
+    opts.bucket  = bucket;   /* может быть NULL → default_bucket */
+    opts.objects = objs;
+    opts.count   = count;
+    opts.quiet   = quiet;
+    opts.flags   = 0;
+
+    s3_error_t err = S3_ERROR_INIT;
+    s3_error_code_t rc =
+        s3_client_delete_objects(client, &opts, &err);
+
+    free(objs);
+
+    if (rc == S3_E_OK) {
+        lua_pushboolean(L, 1);
+        return 1;
+    }
+
+    lua_pushnil(L);
+    l_s3_push_error(L, &err);
+    return 2;
+}
+
+
 /* ---------- s3.new{...} ---------- */
 
 static int
@@ -474,7 +576,8 @@ static const luaL_Reg s3_client_methods[] = {
     { "put_fd",         l_s3_client_put_fd },
     { "get_fd",         l_s3_client_get_fd },
     { "create_bucket",  l_s3_client_create_bucket },
-    { "list_objects",    l_s3_client_list_objects },
+    { "list_objects",   l_s3_client_list_objects },
+    { "delete_objects", l_s3_client_delete_objects },
     { "close",          l_s3_client_close },
     { "__gc",           l_s3_client_gc },
     { NULL, NULL }

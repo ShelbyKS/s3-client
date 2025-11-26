@@ -37,7 +37,8 @@ services:
         tarantool test_put_get.lua &&
         tarantool test_multi.lua &&
         tarantool test_create_bucket.lua &&
-        tarantool test_list_objects.lua
+        tarantool test_list_objects.lua &&
+        tarantool test_delete_objects.lua
       "
 
 volumes:
