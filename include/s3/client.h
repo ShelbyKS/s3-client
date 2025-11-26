@@ -313,6 +313,7 @@ s3_list_objects_result_destroy(s3_client_t *client, s3_list_objects_result_t *re
 
 typedef struct s3_delete_object {
     const char *key;   /* обязательный объектный ключ */
+    /* TODO: поддержать */
     const char *version_id; /* необязательный */
 } s3_delete_object_t;
 
@@ -321,6 +322,7 @@ typedef struct s3_delete_objects_opts {
     const s3_delete_object_t *objects; /* массив ключей */
     size_t                count;    /* сколько элементов в objects */
 
+    /* TODO: поддержать */
     bool                  quiet;    /* <Quiet>true</Quiet> в XML */
     uint32_t              flags;    /* на будущее */
 } s3_delete_objects_opts_t;
