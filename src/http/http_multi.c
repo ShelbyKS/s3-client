@@ -365,12 +365,8 @@ s3_http_multi_put_fd(struct s3_http_backend_impl *backend,
         return err->code;
     }
 
-    s3_easy_io_t io;
-    s3_easy_io_init_fd(&io, fd, offset, size);
-
     s3_easy_handle_t *h = NULL;
-    s3_error_code_t code =
-        s3_easy_factory_new_put_fd(client, opts, &io, &h, err);
+    s3_error_code_t code = s3_easy_factory_new_put_fd(client, opts, fd, offset, size, &h, err);
     if (code != S3_E_OK)
         return code;
 
@@ -400,12 +396,8 @@ s3_http_multi_get_fd(struct s3_http_backend_impl *backend,
         return err->code;
     }
 
-    s3_easy_io_t io;
-    s3_easy_io_init_fd(&io, fd, offset, max_size);
-
     s3_easy_handle_t *h = NULL;
-    s3_error_code_t code =
-        s3_easy_factory_new_get_fd(client, opts, &io, &h, err);
+    s3_error_code_t code = s3_easy_factory_new_get_fd(client, opts, fd, offset, max_size, &h, err);
     if (code != S3_E_OK)
         return code;
 
@@ -466,14 +458,8 @@ s3_http_multi_list_objects(struct s3_http_backend_impl *backend,
 
     memset(out, 0, sizeof(*out));
 
-    s3_mem_buf_t buf;
-    memset(&buf, 0, sizeof(buf));
-
-    s3_easy_io_t io;
-    s3_easy_io_init_mem(&io, &buf, 0);
-
     s3_easy_handle_t *h = NULL;
-    s3_error_code_t rc = s3_easy_factory_new_list_objects(client, opts, &io, &h, err);
+    s3_error_code_t rc = s3_easy_factory_new_list_objects(client, opts, &h, err);
     if (rc != S3_E_OK) {
         return rc;
     }

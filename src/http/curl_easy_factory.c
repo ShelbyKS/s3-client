@@ -461,22 +461,22 @@ s3_easy_handle_destroy(s3_easy_handle_t *h)
 s3_error_code_t
 s3_easy_factory_new_put_fd(s3_client_t *client,
                         const s3_put_opts_t *opts,
-                        const s3_easy_io_t *io,
+                        int fd, off_t offset, size_t size,
                         s3_easy_handle_t **out_handle,
                         s3_error_t *error)
 {
     s3_error_t local_err = S3_ERROR_INIT;
     s3_error_t *err = error ? error : &local_err;
 
-    if (out_handle == NULL || client == NULL || opts == NULL || io == NULL) {
+    if (out_handle == NULL || client == NULL || opts == NULL) {
         s3_error_set(err, S3_E_INVALID_ARG,
-                     "client, opts, io or out_handle is NULL", 0, 0, 0);
+                     "client, opts or out_handle is NULL", 0, 0, 0);
         return err->code;
     }
 
-    if (io->kind != S3_IO_FD || io->u.fd.fd < 0 || io->size_limit == 0) {
+    if (fd < 0 || size == 0) {
         s3_error_set(err, S3_E_INVALID_ARG,
-                     "invalid fd or size_limit for PUT", 0, 0, 0);
+                     "invalid fd or size for PUT", 0, 0, 0);
         return err->code;
     }
 
@@ -488,10 +488,7 @@ s3_easy_factory_new_put_fd(s3_client_t *client,
     }
 
     /* Настраиваем I/O: читаем тело из fd, ничего не пишем. */
-    s3_easy_io_init_fd(&h->read_io,
-                       io->u.fd.fd,
-                       io->u.fd.offset,
-                       io->size_limit);
+    s3_easy_io_init_fd(&h->read_io, fd, offset, size);
     s3_easy_io_init_none(&h->write_io);
 
     h->read_bytes_total = 0;
@@ -517,9 +514,7 @@ s3_easy_factory_new_put_fd(s3_client_t *client,
     curl_easy_setopt(h->easy, CURLOPT_UPLOAD, 1L);
     curl_easy_setopt(h->easy, CURLOPT_READFUNCTION, s3_curl_read_cb);
     curl_easy_setopt(h->easy, CURLOPT_READDATA, h);
-
-    curl_easy_setopt(h->easy, CURLOPT_INFILESIZE_LARGE,
-                     (curl_off_t)io->size_limit);
+    curl_easy_setopt(h->easy, CURLOPT_INFILESIZE_LARGE, (curl_off_t)size);
 
     s3_curl_apply_common_opts(h);
     s3_apply_headers_common(h, opts, err);
@@ -537,20 +532,20 @@ s3_easy_factory_new_put_fd(s3_client_t *client,
 s3_error_code_t
 s3_easy_factory_new_get_fd(s3_client_t *client,
                         const s3_get_opts_t *opts,
-                        const s3_easy_io_t *io,
+                        int fd, off_t offset, size_t max_size,
                         s3_easy_handle_t **out_handle,
                         s3_error_t *error)
 {
     s3_error_t local_err = S3_ERROR_INIT;
     s3_error_t *err = error ? error : &local_err;
 
-    if (out_handle == NULL || client == NULL || opts == NULL || io == NULL) {
+    if (out_handle == NULL || client == NULL || opts == NULL) {
         s3_error_set(err, S3_E_INVALID_ARG,
-                     "client, opts, io or out_handle is NULL", 0, 0, 0);
+                     "client, opts or out_handle is NULL", 0, 0, 0);
         return err->code;
     }
 
-    if (io->kind != S3_IO_FD || io->u.fd.fd < 0) {
+    if (fd < 0) {
         s3_error_set(err, S3_E_INVALID_ARG,
                      "invalid fd for GET", 0, 0, 0);
         return err->code;
@@ -563,11 +558,10 @@ s3_easy_factory_new_get_fd(s3_client_t *client,
         return err->code;
     }
 
-    /* Читаем из сети → пишем в fd. */
-    s3_easy_io_init_fd(&h->write_io,
-                       io->u.fd.fd,
-                       io->u.fd.offset,
-                       io->size_limit); /* 0 => без ограничения */
+    /* Читаем из сети → пишем в fd.
+     * max_size == 0 → без ограничения (это уже интерпретирует write_cb).
+     */
+    s3_easy_io_init_fd(&h->write_io, fd, offset, max_size);
     s3_easy_io_init_none(&h->read_io);
 
     h->read_bytes_total = 0;
@@ -665,22 +659,15 @@ s3_easy_factory_new_create_bucket(s3_client_t *client,
 s3_error_code_t
 s3_easy_factory_new_list_objects(s3_client_t *client,
                                  const s3_list_objects_opts_t *opts,
-                                 const s3_easy_io_t *io,
                                  s3_easy_handle_t **out_handle,
                                  s3_error_t *error)
 {
     s3_error_t local_err = S3_ERROR_INIT;
     s3_error_t *err = error ? error : &local_err;
 
-    if (out_handle == NULL || client == NULL || opts == NULL || io == NULL) {
+    if (out_handle == NULL || client == NULL || opts == NULL) {
         s3_error_set(err, S3_E_INVALID_ARG,
-                     "client, opts, io or out_handle is NULL", 0, 0, 0);
-        return err->code;
-    }
-
-    if (io->kind != S3_IO_MEM || io->u.mem.buf == NULL) {
-        s3_error_set(err, S3_E_INVALID_ARG,
-                     "invalid buf for LIST", 0, 0, 0);
+                     "client, opts or out_handle is NULL", 0, 0, 0);
         return err->code;
     }
 
@@ -691,8 +678,15 @@ s3_easy_factory_new_list_objects(s3_client_t *client,
         return err->code;
     }
 
+    /* Читаем только ответ (XML), запрос без тела. */
     s3_easy_io_init_none(&h->read_io);
-    s3_easy_io_init_mem(&h->write_io, io->u.mem.buf, 0);
+
+    /* Пишем ответ в h->owned_resp (как и в delete_objects). */
+    s3_mem_buf_t *resp = &h->owned_resp;
+    resp->data = NULL;
+    resp->size = 0;
+    resp->capacity = 0;
+    s3_easy_io_init_mem(&h->write_io, resp, 0); /* 0 = без лимита */
 
     h->read_bytes_total = 0;
     h->write_bytes_total = 0;

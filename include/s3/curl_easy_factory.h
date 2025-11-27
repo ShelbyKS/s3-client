@@ -115,9 +115,9 @@ struct s3_easy_handle {
 /*
  * Создаёт полностью сконфигурированный CURL easy для PUT.
  *
- * client  — s3_client, из него берём endpoint/region/keys/таймауты.
- * opts    — опции PUT (bucket, key, content_type, и т.п.).
- * io      — описание источника данных (fd/offset/size_limit).
+ * client                 — s3_client, из него берём endpoint/region/keys/таймауты.
+ * opts                   — опции PUT (bucket, key, content_type, и т.п.).
+ * fd/offset/size_limit   — описание источника данных.
  *
  * При успехе:
  *   - возвращает S3_E_OK;
@@ -131,7 +131,7 @@ struct s3_easy_handle {
 s3_error_code_t
 s3_easy_factory_new_put_fd(s3_client_t *client,
                         const s3_put_opts_t *opts,
-                        const s3_easy_io_t *io,
+                        int fd, off_t offset, size_t size,
                         s3_easy_handle_t **out_handle,
                         s3_error_t *error);
 
@@ -145,7 +145,7 @@ s3_easy_factory_new_put_fd(s3_client_t *client,
 s3_error_code_t
 s3_easy_factory_new_get_fd(s3_client_t *client,
                         const s3_get_opts_t *opts,
-                        const s3_easy_io_t *io,
+                        int fd, off_t offset, size_t max_size,
                         s3_easy_handle_t **out_handle,
                         s3_error_t *error);
 
@@ -158,7 +158,6 @@ s3_easy_factory_new_create_bucket(s3_client_t *client,
 s3_error_code_t
 s3_easy_factory_new_list_objects(s3_client_t *client,
                                  const s3_list_objects_opts_t *opts,
-                                 const s3_easy_io_t *io,
                                  s3_easy_handle_t **out_handle,
                                  s3_error_t *error);
 

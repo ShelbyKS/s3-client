@@ -122,11 +122,8 @@ s3_http_easy_put_fd(struct s3_http_backend_impl *backend,
         return err->code;
     }
 
-    s3_easy_io_t io;
-    s3_easy_io_init_fd(&io, fd, offset, size);
-
     s3_easy_handle_t *h = NULL;
-    s3_error_code_t code = s3_easy_factory_new_put_fd(client, opts, &io, &h, err);
+    s3_error_code_t code = s3_easy_factory_new_put_fd(client, opts, fd, offset, size, &h, err);
     if (code != S3_E_OK)
         return code;
 
@@ -160,11 +157,8 @@ s3_http_easy_get_fd(struct s3_http_backend_impl *backend,
         return err->code;
     }
 
-    s3_easy_io_t io;
-    s3_easy_io_init_fd(&io, fd, offset, max_size);
-
     s3_easy_handle_t *h = NULL;
-    s3_error_code_t code = s3_easy_factory_new_get_fd(client, opts, &io, &h, err);
+    s3_error_code_t code = s3_easy_factory_new_get_fd(client, opts, fd, offset, max_size, &h, err);
     if (code != S3_E_OK)
         return code;
 
@@ -226,16 +220,8 @@ s3_http_easy_list_objects(struct s3_http_backend_impl *backend,
 
     memset(out, 0, sizeof(*out));
 
-    /* Буфер для ответа ListObjectsV2. */
-    s3_mem_buf_t buf;
-    memset(&buf, 0, sizeof(buf));
-
-    /* I/O: пишем тело ответа в память. */
-    s3_easy_io_t io;
-    s3_easy_io_init_mem(&io, &buf, 0); /* size_limit = 0 → без ограничения */
-
     s3_easy_handle_t *h = NULL;
-    s3_error_code_t code = s3_easy_factory_new_list_objects(client, opts, &io, &h, err);
+    s3_error_code_t code = s3_easy_factory_new_list_objects(client, opts, &h, err);
     if (code != S3_E_OK) {
         return code;
     }
@@ -243,22 +229,15 @@ s3_http_easy_list_objects(struct s3_http_backend_impl *backend,
     size_t bytes_sent = 0;
     code = s3_http_easy_perform(h, &bytes_sent, err);
 
-    s3_easy_handle_destroy(h);
+    /* После perform ответ лежит в h->owned_resp. */
+    s3_mem_buf_t *resp = &h->owned_resp;
+    const char *xml = resp->data ? resp->data : "";
 
-    if (code != S3_E_OK) {
-        if (buf.data)
-            s3_free(&client->alloc, buf.data);
-        return code;
+    if (code == S3_E_OK) {
+        code = s3_parse_list_response(client, xml, out, err);
     }
 
-    /* buf.data содержит XML; парсим в s3_list_result_t. */
-    const char *xml = buf.data ? buf.data : "";
-
-    code = s3_parse_list_response(client, xml, out, err);
-
-    if (buf.data)
-        s3_free(&client->alloc, buf.data);
-
+    s3_easy_handle_destroy(h);
     return code;
 }
 
