@@ -1,12 +1,10 @@
-#include <curl/curl.h>
 #include <errno.h>
+#include <string.h>
 
 #include "s3_internal.h"
 #include "s3/curl_easy_factory.h"
 #include "s3/alloc.h"
 #include "s3/parser.h"
-
-#include <string.h>
 
 /*
  * Конкретная реализация backend'а на curl_easy.
@@ -58,7 +56,6 @@ s3_http_map_http_status(long status)
  */
 static s3_error_code_t
 s3_http_easy_perform(s3_easy_handle_t *h,
-                     size_t *out_bytes,
                      s3_error_t *error)
 {
     s3_error_t local_err = S3_ERROR_INIT;
@@ -88,12 +85,6 @@ s3_http_easy_perform(s3_easy_handle_t *h,
         snprintf(msg, sizeof(msg), "HTTP status %ld", http_status);
         s3_error_set(err, code, msg, 0, (int)http_status, 0);
         return code;
-    }
-
-    if (out_bytes != NULL) {
-        /* Для PUT: считаем read_bytes_total, для GET: write_bytes_total.
-         * Конкретный вызов сам решит, откуда брать. */
-        *out_bytes = 0;
     }
 
     s3_error_clear(err);
@@ -127,14 +118,10 @@ s3_http_easy_put_fd(struct s3_http_backend_impl *backend,
     if (code != S3_E_OK)
         return code;
 
-    /* bytes_sent на случай отладки/метрик, пока не возвращаем наружу. */
-    size_t bytes_sent = 0;
-    code = s3_http_easy_perform(h, &bytes_sent, err);
-
-    /* Для статистики можно было бы проверить: bytes_sent == size. */
-    (void)bytes_sent;
+    code = s3_http_easy_perform(h, err);
 
     s3_easy_handle_destroy(h);
+
     return code;
 }
 
@@ -162,8 +149,7 @@ s3_http_easy_get_fd(struct s3_http_backend_impl *backend,
     if (code != S3_E_OK)
         return code;
 
-    size_t bytes_sent = 0;
-    code = s3_http_easy_perform(h, &bytes_sent, err);
+    code = s3_http_easy_perform(h, err);
 
     if (bytes_written != NULL)
         *bytes_written = h->write_bytes_total;
@@ -183,7 +169,7 @@ s3_http_easy_create_bucket(struct s3_http_backend_impl *backend,
     s3_error_t local_err = S3_ERROR_INIT;
     s3_error_t *err = error ? error : &local_err;
 
-    if (opts->bucket == NULL || (opts->bucket)[0] == '\0') {
+    if (opts == NULL || opts->bucket == NULL || (opts->bucket)[0] == '\0') {
         s3_error_set(err, S3_E_INVALID_ARG,
                      "bucket name is empty", 0, 0, 0);
         return err->code;
@@ -194,7 +180,8 @@ s3_http_easy_create_bucket(struct s3_http_backend_impl *backend,
     if (code != S3_E_OK)
         return code;
 
-    code = s3_http_easy_perform(h, NULL, err);
+    code = s3_http_easy_perform(h, err);
+
     s3_easy_handle_destroy(h);
 
     return code;
@@ -226,8 +213,7 @@ s3_http_easy_list_objects(struct s3_http_backend_impl *backend,
         return code;
     }
 
-    size_t bytes_sent = 0;
-    code = s3_http_easy_perform(h, &bytes_sent, err);
+    code = s3_http_easy_perform(h, err);
 
     /* После perform ответ лежит в h->owned_resp. */
     s3_mem_buf_t *resp = &h->owned_resp;
@@ -238,6 +224,7 @@ s3_http_easy_list_objects(struct s3_http_backend_impl *backend,
     }
 
     s3_easy_handle_destroy(h);
+
     return code;
 }
 
@@ -264,11 +251,10 @@ s3_http_easy_delete_objects(struct s3_http_backend_impl *backend,
         return code;
     }
 
-    size_t bytes = 0;
-    code = s3_http_easy_perform(h, &bytes, err);
+    code = s3_http_easy_perform(h, err);
 
     /* Если нужен разбор ответа — смотрим в h->owned_resp. */
-    if (h->owned_resp.data && h->owned_resp.size > 0) {
+    if (code != S3_E_OK && h->owned_resp.data && h->owned_resp.size > 0) {
         fprintf(stderr,
                 "[s3] delete_objects resp (%zu bytes):\n%.*s\n",
                 h->owned_resp.size,

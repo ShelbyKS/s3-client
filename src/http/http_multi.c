@@ -507,7 +507,7 @@ s3_http_multi_delete_objects(struct s3_http_backend_impl *backend,
 
     rc = s3_http_multi_submit_and_wait(mb, h, NULL, err);
 
-    if (h->owned_resp.data && h->owned_resp.size > 0) {
+    if (rc != S3_E_OK && h->owned_resp.data && h->owned_resp.size > 0) {
         // TODO: пишем в err ?
         fprintf(stderr,
                 "[s3-multi] delete_objects resp (%zu bytes):\n%.*s\n",

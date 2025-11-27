@@ -480,7 +480,7 @@ s3_easy_factory_new_put_fd(s3_client_t *client,
     s3_curl_apply_common_opts(h);
     
     if (opts->content_type != NULL) {
-        // TODO: сделать нормально, без фиксированного буффера
+        // TODO: всегда ли хватит?
         char buf[256];
         int n = snprintf(buf, sizeof(buf), "Content-Type: %s", opts->content_type);
         if (n > 0 && (size_t)n < sizeof(buf))
@@ -771,7 +771,7 @@ s3_easy_factory_new_delete_objects(s3_client_t *client,
 
     s3_curl_apply_common_opts(h);
 
-    // TODO: хватит ли?
+    // TODO: всегда ли хватит?
     char header_md5[128];
     rc = s3_build_content_md5_header(body->data, body->size,
                                     header_md5, sizeof(header_md5), err);
