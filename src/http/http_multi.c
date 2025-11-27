@@ -340,7 +340,7 @@ s3_http_multi_submit_and_wait(s3_http_multi_backend_t *mb,
     s3_error_code_t rc = req->code;
 
     free(req);
-    s3_easy_handle_destroy(easy);
+    /* easy не трогаем – ответственность вызывающей стороны */
 
     return rc;
 }
@@ -374,7 +374,11 @@ s3_http_multi_put_fd(struct s3_http_backend_impl *backend,
     if (code != S3_E_OK)
         return code;
 
-    return s3_http_multi_submit_and_wait(mb, h, NULL, err);
+    s3_error_code_t rc = s3_http_multi_submit_and_wait(mb, h, NULL, err);
+
+    s3_easy_handle_destroy(h);
+
+    return code;
 }
 
 static s3_error_code_t
@@ -408,6 +412,8 @@ s3_http_multi_get_fd(struct s3_http_backend_impl *backend,
     s3_error_code_t rc =
         s3_http_multi_submit_and_wait(mb, h, bytes_written, err);
 
+    s3_easy_handle_destroy(h);
+
     return rc;
 }
 
@@ -434,6 +440,8 @@ s3_http_multi_create_bucket(struct s3_http_backend_impl *backend,
         return code;
 
     s3_error_code_t rc = s3_http_multi_submit_and_wait(mb, h, NULL, err);
+
+    s3_easy_handle_destroy(h);
 
     return rc;
 }
@@ -475,18 +483,14 @@ s3_http_multi_list_objects(struct s3_http_backend_impl *backend,
      */
     rc = s3_http_multi_submit_and_wait(mb, h, NULL, err);
 
-    if (rc != S3_E_OK) {
-        if (buf.data)
-            s3_free(&client->alloc, buf.data);
-        return rc;
+    s3_mem_buf_t *resp = &h->owned_resp;
+    const char *xml = resp->data ? resp->data : "";
+
+    if (rc == S3_E_OK) {
+        rc = s3_parse_list_response(client, xml, out, err);
     }
 
-    const char *xml = buf.data ? buf.data : "";
-
-    rc = s3_parse_list_response(client, xml, out, err);
-
-    if (buf.data)
-        s3_free(&client->alloc, buf.data);
+    s3_easy_handle_destroy(h);
 
     return rc;
 }
@@ -518,6 +522,7 @@ s3_http_multi_delete_objects(struct s3_http_backend_impl *backend,
     rc = s3_http_multi_submit_and_wait(mb, h, NULL, err);
 
     if (h->owned_resp.data && h->owned_resp.size > 0) {
+        // TODO: пишем в err ?
         fprintf(stderr,
                 "[s3-multi] delete_objects resp (%zu bytes):\n%.*s\n",
                 h->owned_resp.size,
@@ -525,6 +530,8 @@ s3_http_multi_delete_objects(struct s3_http_backend_impl *backend,
                 h->owned_resp.data);
         /* Тут тоже можно вызывать парсер. */
     }
+
+    s3_easy_handle_destroy(h);
 
     return rc;
 }
