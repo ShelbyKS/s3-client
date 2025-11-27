@@ -123,4 +123,9 @@ int
 s3_base64_encode(const unsigned char *in, size_t in_len,
                  char *out, size_t out_cap);
 
+s3_error_code_t
+s3_build_content_md5_header(const void *data, size_t len,
+                            char *out, size_t out_cap,
+                            s3_error_t *err);
+
 #endif /* S3_HTTP_UTIL_H */

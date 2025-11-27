@@ -3,6 +3,8 @@
 #include <string.h>
 #include <errno.h>
 #include <stdio.h>
+#include <openssl/md5.h>
+#include <openssl/evp.h>
 
 /* ---------- работа с s3_mem_buf_t ---------- */
 
@@ -512,4 +514,85 @@ s3_base64_encode(const unsigned char *in, size_t in_len,
 
     out[o] = '\0';
     return (int)o;
+}
+
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+
+static int
+s3_md5_digest(const void *data, size_t len, unsigned char *out)
+{
+    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+    if (ctx == NULL)
+        return -1;
+
+    int rc = 0;
+
+    if (EVP_DigestInit_ex(ctx, EVP_md5(), NULL) != 1 ||
+        EVP_DigestUpdate(ctx, data, len) != 1) {
+        rc = -1;
+        goto done;
+    }
+
+    unsigned int md_len = 0;
+    if (EVP_DigestFinal_ex(ctx, out, &md_len) != 1 || md_len != MD5_DIGEST_LENGTH) {
+        rc = -1;
+        goto done;
+    }
+
+done:
+    EVP_MD_CTX_free(ctx);
+    return rc;
+}
+
+#else
+
+static int
+s3_md5_digest(const void *data, size_t len, unsigned char *out)
+{
+    /* Классический MD5() для OpenSSL < 3.0 */
+    MD5((const unsigned char *)data, len, out);
+    return 0;
+}
+
+#endif
+
+s3_error_code_t
+s3_build_content_md5_header(const void *data, size_t len,
+                            char *out, size_t out_cap,
+                            s3_error_t *error)
+{
+    s3_error_t local_err = S3_ERROR_INIT;
+    s3_error_t *err = error ? error : &local_err;
+
+    if (data == NULL || len == 0 || out == NULL || out_cap == 0) {
+        s3_error_set(err, S3_E_INVALID_ARG,
+                     "invalid args for s3_build_content_md5_header",
+                     0, 0, 0);
+        return err->code;
+    }
+
+    unsigned char md5_raw[MD5_DIGEST_LENGTH];
+	if (s3_md5_digest(data, len, md5_raw) != 0) {
+		s3_error_set(err, S3_E_INTERNAL,
+					"failed to compute MD5 digest", 0, 0, 0);
+		return err->code;
+	}
+
+    char md5_b64[MD5_DIGEST_LENGTH * 4 / 3 + 4];
+    int enc_len = s3_base64_encode(md5_raw, MD5_DIGEST_LENGTH,
+                                   md5_b64, sizeof(md5_b64));
+    if (enc_len < 0) {
+        s3_error_set(err, S3_E_INTERNAL,
+                     "base64 buffer is too small for MD5", 0, 0, 0);
+        return err->code;
+    }
+
+    int n = snprintf(out, out_cap, "Content-MD5: %s", md5_b64);
+    if (n <= 0 || (size_t)n >= out_cap) {
+        s3_error_set(err, S3_E_INTERNAL,
+                     "Content-MD5 header buffer too small", 0, 0, 0);
+        return err->code;
+    }
+
+    return S3_E_OK;
 }

@@ -290,9 +290,6 @@ s3_curl_apply_sigv4(s3_easy_handle_t *h, s3_error_t *error)
 
             h->headers = curl_slist_append(h->headers, hdr);
             s3_free(&c->alloc, hdr);
-
-            if (h->headers != NULL)
-                curl_easy_setopt(h->easy, CURLOPT_HTTPHEADER, h->headers);
         }
 
         return S3_E_OK;
@@ -375,37 +372,7 @@ s3_curl_apply_sigv4(s3_easy_handle_t *h, s3_error_t *error)
 
         h->headers = curl_slist_append(h->headers, hdr);
         s3_free(&c->alloc, hdr);
-
-        if (h->headers != NULL)
-            curl_easy_setopt(h->easy, CURLOPT_HTTPHEADER, h->headers);
     }
-
-    return S3_E_OK;
-}
-
-/* ----------------- заголовки ----------------- */
-
-//TODO: спилить s3_put_opts_t, сделать хэлпер общим для всех методов или спилить
-static s3_error_code_t
-s3_apply_headers_common(s3_easy_handle_t *h,
-                        const s3_put_opts_t *put_opts,
-                        s3_error_t *error)
-{
-    (void)error;
-
-    struct curl_slist *headers = h->headers;
-
-    if (put_opts != NULL && put_opts->content_type != NULL) {
-        char buf[256];
-        int n = snprintf(buf, sizeof(buf), "Content-Type: %s",
-                         put_opts->content_type);
-        if (n > 0 && (size_t)n < sizeof(buf))
-            headers = curl_slist_append(headers, buf);
-    }
-
-    h->headers = headers;
-    if (headers != NULL)
-        curl_easy_setopt(h->easy, CURLOPT_HTTPHEADER, headers);
 
     return S3_E_OK;
 }
@@ -517,12 +484,29 @@ s3_easy_factory_new_put_fd(s3_client_t *client,
     curl_easy_setopt(h->easy, CURLOPT_INFILESIZE_LARGE, (curl_off_t)size);
 
     s3_curl_apply_common_opts(h);
-    s3_apply_headers_common(h, opts, err);
+    
+    if (opts->content_type != NULL) {
+        // TODO: сделать нормально, без фиксированного буффера
+        char buf[256];
+        int n = snprintf(buf, sizeof(buf), "Content-Type: %s", opts->content_type);
+        if (n > 0 && (size_t)n < sizeof(buf))
+            h->headers = curl_slist_append(h->headers, buf);
+        else {
+            s3_error_set(err, S3_E_NOMEM,
+                     "Failed to make Content-Type header", ENOMEM, 0, 0);
+            return err->code;
+        }
+
+    }
 
     s3_error_code_t rc2 = s3_curl_apply_sigv4(h, err);
     if (rc2 != S3_E_OK) {
        s3_easy_handle_destroy(h);
        return rc2;
+    }
+
+    if (h->headers != NULL) {
+        curl_easy_setopt(h->easy, CURLOPT_HTTPHEADER, h->headers);
     }
 
     *out_handle = h;
@@ -591,12 +575,15 @@ s3_easy_factory_new_get_fd(s3_client_t *client,
         curl_easy_setopt(h->easy, CURLOPT_RANGE, opts->range);
 
     s3_curl_apply_common_opts(h);
-    s3_apply_headers_common(h, NULL, err);
 
     s3_error_code_t rc2 = s3_curl_apply_sigv4(h, err);
     if (rc2 != S3_E_OK) {
         s3_easy_handle_destroy(h);
         return rc2;
+    }
+
+    if (h->headers != NULL) {
+        curl_easy_setopt(h->easy, CURLOPT_HTTPHEADER, h->headers);
     }
 
     *out_handle = h;
@@ -644,12 +631,15 @@ s3_easy_factory_new_create_bucket(s3_client_t *client,
     curl_easy_setopt(h->easy, CURLOPT_CUSTOMREQUEST, "PUT");
 
     s3_curl_apply_common_opts(h);
-    s3_apply_headers_common(h, NULL, err);
 
     s3_error_code_t rc2 = s3_curl_apply_sigv4(h, err);
     if (rc2 != S3_E_OK) {
         s3_easy_handle_destroy(h);
         return rc2;
+    }
+
+    if (h->headers != NULL) {
+        curl_easy_setopt(h->easy, CURLOPT_HTTPHEADER, h->headers);
     }
 
     *out_handle = h;
@@ -706,12 +696,15 @@ s3_easy_factory_new_list_objects(s3_client_t *client,
     curl_easy_setopt(h->easy, CURLOPT_WRITEDATA, h);
 
     s3_curl_apply_common_opts(h);
-    s3_apply_headers_common(h, NULL, err); /* спец-заголовки не нужны */
 
     s3_error_code_t rc2 = s3_curl_apply_sigv4(h, err);
     if (rc2 != S3_E_OK) {
         s3_easy_handle_destroy(h);
         return rc2;
+    }
+
+    if (h->headers != NULL) {
+        curl_easy_setopt(h->easy, CURLOPT_HTTPHEADER, h->headers);
     }
 
     *out_handle = h;
@@ -784,42 +777,20 @@ s3_easy_factory_new_delete_objects(s3_client_t *client,
 
     s3_curl_apply_common_opts(h);
 
-    /* Общие заголовки + Content-Type: application/xml */
-    s3_apply_headers_common(h, NULL, err);
-    if (h->headers == NULL) {
-        /* если apply_headers_common не добавила ничего, всё равно ок */
-    }
-
-    /* TODO: вынести в функцию */
-    /* --- Считаем Content-MD5 для XML тела --- */
-    unsigned char md5_raw[MD5_DIGEST_LENGTH];
-    MD5((const unsigned char *)body->data, body->size, md5_raw);
-
-    /* base64(MD5) → строка для заголовка Content-MD5 */
-    char md5_b64[MD5_DIGEST_LENGTH * 4 / 3 + 4]; /* с запасом под '=' и '\0' */
-    s3_base64_encode(md5_raw, MD5_DIGEST_LENGTH, md5_b64, sizeof(md5_b64));
-
+    // TODO: хватит ли?
     char header_md5[128];
-    int n = snprintf(header_md5, sizeof(header_md5),
-                     "Content-MD5: %s", md5_b64);
-    if (n <= 0 || (size_t)n >= sizeof(header_md5)) {
-        s3_error_set(err, S3_E_INTERNAL,
-                     "Content-MD5 header buffer too small", 0, 0, 0);
+    rc = s3_build_content_md5_header(body->data, body->size,
+                                    header_md5, sizeof(header_md5), err);
+    if (rc != S3_E_OK) {
         s3_easy_handle_destroy(h);
-        return err->code;
+        return rc;
     }
-    /* --------- */
-
 
     struct curl_slist *headers = h->headers;
 
     headers = curl_slist_append(headers, "Content-Type: application/xml");
-    if (headers != NULL) {
-        h->headers = headers;
-        curl_easy_setopt(h->easy, CURLOPT_HTTPHEADER, headers);
-    }
-
     headers = curl_slist_append(headers, header_md5);
+
     if (!headers) {
         s3_easy_handle_destroy(h);
         s3_error_set(err, S3_E_NOMEM,
@@ -831,6 +802,10 @@ s3_easy_factory_new_delete_objects(s3_client_t *client,
     if (rc2 != S3_E_OK) {
         s3_easy_handle_destroy(h);
         return rc2;
+    }
+
+    if (headers != NULL) {
+        curl_easy_setopt(h->easy, CURLOPT_HTTPHEADER, headers);
     }
 
     *out_handle = h;
