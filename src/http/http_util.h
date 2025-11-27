@@ -53,6 +53,24 @@ int
 s3_url_encode_query(s3_client_t *client, const char *src,
                     char **out, s3_error_t *error);
 
+
+/* TODO: добавить URL-encoding key (кроме '/'). */
+/*
+ * Построение URL.
+ *
+ * Варианты:
+ *   1) bucket != NULL, key != NULL  →  /bucket/key
+ *   2) bucket != NULL, key == NULL  →  /bucket
+ *
+ * endpoint не должен заканчиватьcя слэшем.
+ */
+s3_error_code_t
+s3_build_url(s3_client_t *client,
+             const char *bucket,
+             const char *key,         /* может быть NULL */
+             char **out_url,
+             s3_error_t *error);
+
 /*
  * Построение URL для ListObjectsV2:
  *   endpoint/bucket?list-type=2[&prefix=...][&max-keys=...][&continuation-token=...]
