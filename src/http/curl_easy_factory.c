@@ -9,7 +9,6 @@
 #include <unistd.h>
 #include <stdio.h>
 #include <stddef.h>
-#include <openssl/md5.h>
 
 #ifdef S3_USE_TARANTOOL_CURL
 #  pragma message(">>> using tarantool/curl.h")
@@ -467,17 +466,12 @@ s3_easy_factory_new_put_fd(s3_client_t *client,
                                       opts->key,
                                       &url, err);
     if (rc != S3_E_OK) {
-        s3_easy_handle_destroy(h);
-        return rc;
+        goto fail;
     }
     /* Сохраняем URL внутри easy-хендла для последующего free. */
     h->url = url;
 
     curl_easy_setopt(h->easy, CURLOPT_URL, url);
-    /* URL можно освобождать только после выполнения запроса, поэтому оставляем
-     * жизнь строки внутри h/клиента. Чтобы не усложнять, пока просто не free. */
-    /* TODO: потом можно завести поле в h для хранения URL и освободить в destroy. */
-
     curl_easy_setopt(h->easy, CURLOPT_UPLOAD, 1L);
     curl_easy_setopt(h->easy, CURLOPT_READFUNCTION, s3_curl_read_cb);
     curl_easy_setopt(h->easy, CURLOPT_READDATA, h);
@@ -494,15 +488,14 @@ s3_easy_factory_new_put_fd(s3_client_t *client,
         else {
             s3_error_set(err, S3_E_NOMEM,
                      "Failed to make Content-Type header", ENOMEM, 0, 0);
-            return err->code;
+            goto fail;
         }
 
     }
 
-    s3_error_code_t rc2 = s3_curl_apply_sigv4(h, err);
-    if (rc2 != S3_E_OK) {
-       s3_easy_handle_destroy(h);
-       return rc2;
+    rc = s3_curl_apply_sigv4(h, err);
+    if (rc != S3_E_OK) {
+       goto fail;
     }
 
     if (h->headers != NULL) {
@@ -511,6 +504,10 @@ s3_easy_factory_new_put_fd(s3_client_t *client,
 
     *out_handle = h;
     return S3_E_OK;
+
+fail:
+    s3_easy_handle_destroy(h);
+    return err->code;
 }
 
 s3_error_code_t
@@ -557,16 +554,12 @@ s3_easy_factory_new_get_fd(s3_client_t *client,
                                       opts->key,
                                       &url, err);
     if (rc != S3_E_OK) {
-        s3_easy_handle_destroy(h);
-        return rc;
+        goto fail;
     }
-
-    /* Сохраняем URL внутри easy-хендла для последующего free. */
     h->url = url;
 
     curl_easy_setopt(h->easy, CURLOPT_URL, url);
     curl_easy_setopt(h->easy, CURLOPT_HTTPGET, 1L);
-
     curl_easy_setopt(h->easy, CURLOPT_WRITEFUNCTION, s3_curl_write_cb);
     curl_easy_setopt(h->easy, CURLOPT_WRITEDATA, h);
 
@@ -576,10 +569,9 @@ s3_easy_factory_new_get_fd(s3_client_t *client,
 
     s3_curl_apply_common_opts(h);
 
-    s3_error_code_t rc2 = s3_curl_apply_sigv4(h, err);
-    if (rc2 != S3_E_OK) {
-        s3_easy_handle_destroy(h);
-        return rc2;
+    rc = s3_curl_apply_sigv4(h, err);
+    if (rc != S3_E_OK) {
+        goto fail;
     }
 
     if (h->headers != NULL) {
@@ -588,6 +580,10 @@ s3_easy_factory_new_get_fd(s3_client_t *client,
 
     *out_handle = h;
     return S3_E_OK;
+
+fail:
+    s3_easy_handle_destroy(h);
+    return err->code;
 }
 
 s3_error_code_t
@@ -618,14 +614,10 @@ s3_easy_factory_new_create_bucket(s3_client_t *client,
                                       NULL,
                                       &url, err);
     if (rc != S3_E_OK) {
-        s3_easy_handle_destroy(h);
-        return rc;
+        goto fail;
     }
-
-    /* Сохраняем URL внутри easy-хендла для последующего free. */
     h->url = url;
     curl_easy_setopt(h->easy, CURLOPT_URL, url);
-
     /* PUT без тела. */
     curl_easy_setopt(h->easy, CURLOPT_UPLOAD, 0L);
     curl_easy_setopt(h->easy, CURLOPT_CUSTOMREQUEST, "PUT");
@@ -634,8 +626,7 @@ s3_easy_factory_new_create_bucket(s3_client_t *client,
 
     s3_error_code_t rc2 = s3_curl_apply_sigv4(h, err);
     if (rc2 != S3_E_OK) {
-        s3_easy_handle_destroy(h);
-        return rc2;
+        goto fail;
     }
 
     if (h->headers != NULL) {
@@ -644,6 +635,10 @@ s3_easy_factory_new_create_bucket(s3_client_t *client,
 
     *out_handle = h;
     return S3_E_OK;
+
+fail:
+    s3_easy_handle_destroy(h);
+    return err->code;
 }
 
 s3_error_code_t
@@ -684,23 +679,20 @@ s3_easy_factory_new_list_objects(s3_client_t *client,
     char *url = NULL;
     s3_error_code_t rc = s3_build_list_url(client, opts, &url, err);
     if (rc != S3_E_OK) {
-        s3_easy_handle_destroy(h);
-        return rc;
+        goto fail;
     }
     h->url = url;
 
     curl_easy_setopt(h->easy, CURLOPT_URL, url);
     curl_easy_setopt(h->easy, CURLOPT_HTTPGET, 1L);
-
     curl_easy_setopt(h->easy, CURLOPT_WRITEFUNCTION, s3_curl_write_cb);
     curl_easy_setopt(h->easy, CURLOPT_WRITEDATA, h);
 
     s3_curl_apply_common_opts(h);
 
-    s3_error_code_t rc2 = s3_curl_apply_sigv4(h, err);
-    if (rc2 != S3_E_OK) {
-        s3_easy_handle_destroy(h);
-        return rc2;
+    rc = s3_curl_apply_sigv4(h, err);
+    if (rc != S3_E_OK) {
+        goto fail;
     }
 
     if (h->headers != NULL) {
@@ -709,6 +701,10 @@ s3_easy_factory_new_list_objects(s3_client_t *client,
 
     *out_handle = h;
     return S3_E_OK;
+
+fail:
+    s3_easy_handle_destroy(h);
+    return err->code;
 }
 
 s3_error_code_t
@@ -740,8 +736,7 @@ s3_easy_factory_new_delete_objects(s3_client_t *client,
     /* Строим XML-тело в buf. */
     s3_error_code_t rc = s3_build_delete_body(client, opts, body, err);
     if (rc != S3_E_OK) {
-        s3_easy_handle_destroy(h);
-        return rc;
+        goto fail;
     }
 
     /* Исходящее тело: читаем XML из памяти. */
@@ -761,8 +756,7 @@ s3_easy_factory_new_delete_objects(s3_client_t *client,
     char *url = NULL;
     rc = s3_build_delete_url(client, opts, &url, err);
     if (rc != S3_E_OK) {
-        s3_easy_handle_destroy(h);
-        return rc;
+        goto fail;
     }
     h->url = url;
 
@@ -782,32 +776,31 @@ s3_easy_factory_new_delete_objects(s3_client_t *client,
     rc = s3_build_content_md5_header(body->data, body->size,
                                     header_md5, sizeof(header_md5), err);
     if (rc != S3_E_OK) {
-        s3_easy_handle_destroy(h);
-        return rc;
+        goto fail;
     }
 
-    struct curl_slist *headers = h->headers;
+    h->headers = curl_slist_append(h->headers, "Content-Type: application/xml");
+    h->headers = curl_slist_append(h->headers, header_md5);
 
-    headers = curl_slist_append(headers, "Content-Type: application/xml");
-    headers = curl_slist_append(headers, header_md5);
-
-    if (!headers) {
-        s3_easy_handle_destroy(h);
+    if (!h->headers) {
         s3_error_set(err, S3_E_NOMEM,
                      "Failed to append Content-MD5 header", ENOMEM, 0, 0);
-        return err->code;
+        goto fail;
     }
 
-    s3_error_code_t rc2 = s3_curl_apply_sigv4(h, err);
-    if (rc2 != S3_E_OK) {
-        s3_easy_handle_destroy(h);
-        return rc2;
+    rc = s3_curl_apply_sigv4(h, err);
+    if (rc != S3_E_OK) {
+        goto fail;
     }
 
-    if (headers != NULL) {
-        curl_easy_setopt(h->easy, CURLOPT_HTTPHEADER, headers);
+    if (h->headers != NULL) {
+        curl_easy_setopt(h->easy, CURLOPT_HTTPHEADER, h->headers);
     }
 
     *out_handle = h;
     return S3_E_OK;
+
+fail:
+    s3_easy_handle_destroy(h);
+    return err->code;
 }
