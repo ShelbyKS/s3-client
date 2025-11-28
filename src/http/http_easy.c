@@ -253,15 +253,7 @@ s3_http_easy_delete_objects(struct s3_http_backend_impl *backend,
 
     code = s3_http_easy_perform(h, err);
 
-    /* Если нужен разбор ответа — смотрим в h->owned_resp. */
-    if (code != S3_E_OK && h->owned_resp.data && h->owned_resp.size > 0) {
-        fprintf(stderr,
-                "[s3] delete_objects resp (%zu bytes):\n%.*s\n",
-                h->owned_resp.size,
-                (int)h->owned_resp.size,
-                h->owned_resp.data);
-        /* Тут можно вызвать s3_try_parse_and_log_error_xml(h->owned_resp.data, h->owned_resp.size, err); */
-    }
+    // TODO: parse xml response if need
 
     s3_easy_handle_destroy(h);
 

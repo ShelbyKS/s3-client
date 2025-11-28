@@ -507,15 +507,7 @@ s3_http_multi_delete_objects(struct s3_http_backend_impl *backend,
 
     rc = s3_http_multi_submit_and_wait(mb, h, NULL, err);
 
-    if (rc != S3_E_OK && h->owned_resp.data && h->owned_resp.size > 0) {
-        // TODO: пишем в err ?
-        fprintf(stderr,
-                "[s3-multi] delete_objects resp (%zu bytes):\n%.*s\n",
-                h->owned_resp.size,
-                (int)h->owned_resp.size,
-                h->owned_resp.data);
-        /* Тут тоже можно вызывать парсер. */
-    }
+    // TODO: parse xml response if need
 
     s3_easy_handle_destroy(h);
 
