@@ -128,12 +128,4 @@ s3_build_content_md5_header(const void *data, size_t len,
                             char *out, size_t out_cap,
                             s3_error_t *err);
 
-
-/* ----------------- маппинг ошибок CURL/HTTP -> s3_error ----------------- */
-s3_error_code_t
-s3_http_map_curl_error(CURLcode cc);
-
-s3_error_code_t
-s3_http_map_http_status(long status);
-
 #endif /* S3_HTTP_UTIL_H */

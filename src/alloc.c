@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include <small/small.h> /* struct small_alloc, smalloc, smfree */
+#include <small/small.h>
 
 /* ----------------- default allocator (malloc/free/realloc) ----------------- */
 
@@ -118,7 +118,7 @@ s3_small_realloc(void *ctx, void *ptr, size_t size)
     if (old_total >= sizeof(struct s3_small_hdr))
         old_user_size = old_total - sizeof(struct s3_small_hdr);
     else
-        old_user_size = 0; /* на всякий случай, не должен случиться */
+        old_user_size = 0;
 
     /* Новый блок. */
     void *new_ptr = s3_small_malloc(ctx, size);

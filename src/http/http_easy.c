@@ -6,6 +6,7 @@
 #include "s3/alloc.h"
 #include "s3/parser.h"
 #include "http_util.h"
+#include "error.h"
 
 /*
  * Конкретная реализация backend'а на curl_easy.

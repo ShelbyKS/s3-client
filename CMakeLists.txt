@@ -86,7 +86,7 @@ include_directories(
 add_library(s3_client STATIC
     src/client.c
     src/alloc.c
-    src/s3_internal.h          # только для IDE. TODO: убрать
+    src/error.c
     src/http/curl_easy_factory.c
     src/http/http_easy.c
     src/http/http_multi.c

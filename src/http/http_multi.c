@@ -10,6 +10,7 @@
 #include "s3/parser.h"
 #include "s3/alloc.h"
 #include "http_util.h"
+#include "error.h"
 
 typedef struct s3_http_multi_backend s3_http_multi_backend_t;
 

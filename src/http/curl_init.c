@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "s3_internal.h"
+#include "error.h"
 
 /*
  * Однократная инициализация libcurl.

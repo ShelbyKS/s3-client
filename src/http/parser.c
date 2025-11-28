@@ -5,6 +5,7 @@
 #include "s3_internal.h"
 #include "s3/client.h"
 #include "s3/parser.h"
+#include "error.h"
 
 static char *
 s3_xml_get_text_between(s3_client_t *c,
@@ -34,7 +35,7 @@ s3_xml_get_text_between(s3_client_t *c,
 }
 
 /*
- * Примитивный парсер ответа ListObjectsV2.
+ * Парсер ответа ListObjectsV2.
  * Предполагаем стандартный XML от MinIO/AWS:
  *
  *   <ListBucketResult>
