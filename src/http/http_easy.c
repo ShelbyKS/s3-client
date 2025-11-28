@@ -5,6 +5,7 @@
 #include "s3/curl_easy_factory.h"
 #include "s3/alloc.h"
 #include "s3/parser.h"
+#include "http_util.h"
 
 /*
  * Конкретная реализация backend'а на curl_easy.
@@ -12,44 +13,6 @@
 struct s3_http_easy_backend {
     struct s3_http_backend_impl base;
 };
-
-/* ----------------- маппинг ошибок CURL/HTTP -> s3_error ----------------- */
-
-static s3_error_code_t
-s3_http_map_curl_error(CURLcode cc)
-{
-    if (cc == CURLE_OK)
-        return S3_E_OK;
-
-    switch (cc) {
-    case CURLE_OPERATION_TIMEDOUT:
-        return S3_E_TIMEOUT;
-    case CURLE_COULDNT_RESOLVE_HOST:
-    case CURLE_COULDNT_CONNECT:
-        return S3_E_INIT;
-    case CURLE_READ_ERROR:
-    case CURLE_WRITE_ERROR:
-        return S3_E_IO;
-    default:
-        return S3_E_CURL;
-    }
-}
-
-static s3_error_code_t
-s3_http_map_http_status(long status)
-{
-    if (status >= 200 && status < 300)
-        return S3_E_OK;
-    if (status == 404)
-        return S3_E_NOT_FOUND;
-    if (status == 403)
-        return S3_E_ACCESS_DENIED;
-    if (status == 401)
-        return S3_E_AUTH;
-    if (status == 408)
-        return S3_E_TIMEOUT;
-    return S3_E_HTTP;
-}
 
 /*
  * Общий helper: выполнить curl_easy_perform и заполнить s3_error_t.

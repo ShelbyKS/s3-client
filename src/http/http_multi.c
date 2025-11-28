@@ -1,4 +1,3 @@
-#include <curl/curl.h>
 #include <pthread.h>
 #include <string.h>
 #include <errno.h>
@@ -10,6 +9,7 @@
 #include "s3/curl_easy_factory.h"
 #include "s3/parser.h"
 #include "s3/alloc.h"
+#include "http_util.h"
 
 typedef struct s3_http_multi_backend s3_http_multi_backend_t;
 
@@ -51,45 +51,6 @@ struct s3_http_multi_backend {
 
     int running; /* сколько easy сейчас внутри CURLM */
 };
-
-/* --------- маппинг ошибок --------- */
-/* TODO: сделать общий модуль */
-
-static s3_error_code_t
-s3_http_map_curl_error_multi(CURLcode cc)
-{
-    if (cc == CURLE_OK)
-        return S3_E_OK;
-
-    switch (cc) {
-    case CURLE_OPERATION_TIMEDOUT:
-        return S3_E_TIMEOUT;
-    case CURLE_COULDNT_RESOLVE_HOST:
-    case CURLE_COULDNT_CONNECT:
-        return S3_E_INIT;
-    case CURLE_READ_ERROR:
-    case CURLE_WRITE_ERROR:
-        return S3_E_IO;
-    default:
-        return S3_E_CURL;
-    }
-}
-
-static s3_error_code_t
-s3_http_map_http_status_multi(long status)
-{
-    if (status >= 200 && status < 300)
-        return S3_E_OK;
-    if (status == 404)
-        return S3_E_NOT_FOUND;
-    if (status == 403)
-        return S3_E_ACCESS_DENIED;
-    if (status == 401)
-        return S3_E_AUTH;
-    if (status == 408)
-        return S3_E_TIMEOUT;
-    return S3_E_HTTP;
-}
 
 /* --------- вспомогательные функции --------- */
 
@@ -175,13 +136,13 @@ s3_multi_backend_process_done(s3_http_multi_backend_t *mb)
         }
 
         long http_status = 0;
-        s3_error_code_t code = s3_http_map_curl_error_multi(cc);
+        s3_error_code_t code = s3_http_map_curl_error(cc);
         char buf[128] = {0};
 
         if (cc == CURLE_OK) {
             if (curl_easy_getinfo(easy, CURLINFO_RESPONSE_CODE,
                                   &http_status) == CURLE_OK) {
-                code = s3_http_map_http_status_multi(http_status);
+                code = s3_http_map_http_status(http_status);
                 if (code != S3_E_OK) {
                     snprintf(buf, sizeof(buf), "HTTP status %ld", http_status);
                 }
