@@ -1,8 +1,10 @@
+#ifndef TARANTOOL_S3_ERROR_H_INCLUDED
+#define TARANTOOL_S3_ERROR_H_INCLUDED 1
+
 #include <string.h>
 
-#include "s3_internal.h"
+#include "s3/client.h"
 #include <s3/curl_compat.h>
-
 
 /* Обнулить ошибку и выставить code = S3_E_OK. */
 void
@@ -20,3 +22,5 @@ s3_http_map_curl_error(CURLcode cc);
 
 s3_error_code_t
 s3_http_map_http_status(long status);
+
+#endif /* TARANTOOL_S3_CURL_EASY_FACTORY_H_INCLUDED */

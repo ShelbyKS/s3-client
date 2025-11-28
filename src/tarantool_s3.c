@@ -1,10 +1,12 @@
 #include "s3/client.h"
+#include "error.h"
 
 #include <lua.h>
 #include <lauxlib.h>
 #include <string.h>
 #include <errno.h>
 #include <stdlib.h>
+#include <stdbool.h>
 
 /* Имя метатабы для клиента. */
 #define S3_LUA_CLIENT_MT "s3_client_mt"
@@ -19,6 +21,15 @@ static void
 l_s3_push_error(lua_State *L, const s3_error_t *err)
 {
     lua_newtable(L);
+
+    s3_error_t tmp;
+    if (err == NULL) {
+        tmp = (s3_error_t)S3_ERROR_INIT;
+        tmp.code = S3_E_INTERNAL;
+        snprintf(tmp.message, sizeof(tmp.message),
+                 "Unknown error");
+        err = &tmp;
+    }
 
     lua_pushstring(L, s3_error_code_str(err->code));
     lua_setfield(L, -2, "code");
@@ -54,7 +65,6 @@ l_s3_parse_backend(lua_State *L, int idx, s3_http_backend_t *out)
     }
 
     luaL_error(L, "invalid backend '%s', expected 'easy' or 'multi'", s);
-    return -1;
 }
 
 /* ---------- методы клиента ---------- */
