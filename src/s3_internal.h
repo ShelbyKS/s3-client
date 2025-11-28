@@ -85,9 +85,9 @@ struct s3_client {
     uint32_t max_connections_per_host;
     uint32_t multi_idle_timeout_ms;
 
-    const char *ca_file;
-    const char *ca_path;
-    const char *proxy;
+    char *ca_file;
+    char *ca_path;
+    char *proxy;
 
     uint32_t flags;
 
@@ -134,20 +134,6 @@ s3_http_multi_backend_new(struct s3_client *client, s3_error_t *error);
 s3_error_code_t
 s3_curl_global_init(s3_error_t *error);
 
-/*
- * Вспомогательные функции для работы с s3_error_t,
- * доступны во всех внутренних модулях.
- */
-
-/* Обнулить ошибку и выставить code = S3_E_OK. */
-void
-s3_error_clear(s3_error_t *err);
-
-/* Заполнить структуру ошибки. msg можно NULL. */
-void
-s3_error_set(s3_error_t *err, s3_error_code_t code,
-             const char *msg, int os_error,
-             int http_status, long curl_code);
 
 #ifdef __cplusplus
 } /* extern "C" */

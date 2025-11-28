@@ -3,6 +3,7 @@
 
 #include "s3_internal.h"
 #include "http_util.h"
+#include "error.h"
 
 #include <errno.h>
 #include <string.h>

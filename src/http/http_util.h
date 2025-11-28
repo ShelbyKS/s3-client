@@ -3,6 +3,7 @@
 
 #include "s3_internal.h"
 #include "s3/curl_easy_factory.h"
+#include "error.h"
 
 /*
  * Утилиты для работы с s3_mem_buf_t, XML и URL.

@@ -94,12 +94,15 @@ s3_client_free_strings(struct s3_client *c)
     if (c == NULL)
         return;
 
-    s3_free(&c->alloc, c->endpoint);
-    s3_free(&c->alloc, c->region);
-    s3_free(&c->alloc, c->access_key);
-    s3_free(&c->alloc, c->secret_key);
-    s3_free(&c->alloc, c->session_token);
-    s3_free(&c->alloc, c->default_bucket);
+    if (c->endpoint)       s3_free(&c->alloc, c->endpoint);
+    if (c->region)         s3_free(&c->alloc, c->region);
+    if (c->access_key)     s3_free(&c->alloc, c->access_key);
+    if (c->secret_key)     s3_free(&c->alloc, c->secret_key);
+    if (c->session_token)  s3_free(&c->alloc, c->session_token);
+    if (c->default_bucket) s3_free(&c->alloc, c->default_bucket);
+    if (c->ca_file)        s3_free(&c->alloc, c->ca_file);
+    if (c->ca_path)        s3_free(&c->alloc, c->ca_path);
+    if (c->proxy)          s3_free(&c->alloc, c->proxy);
 
     c->endpoint = NULL;
     c->region = NULL;
@@ -126,6 +129,8 @@ s3_client_new(const s3_client_opts_t *opts,
                      "opts or out_client is NULL", 0, 0, 0);
         return err->code;
     }
+
+    *out_client = NULL;
 
     if (opts->endpoint == NULL || opts->region == NULL ||
         opts->access_key == NULL || opts->secret_key == NULL)
@@ -160,15 +165,15 @@ s3_client_new(const s3_client_opts_t *opts,
         goto fail;
 
     c->region = s3_strdup_a(&c->alloc, opts->region, err);
-    if (opts->region != NULL && c->region == NULL)
+    if (c->region == NULL)
         goto fail;
 
     c->access_key = s3_strdup_a(&c->alloc, opts->access_key, err);
-    if (opts->access_key != NULL && c->access_key == NULL)
+    if (c->access_key == NULL)
         goto fail;
 
     c->secret_key = s3_strdup_a(&c->alloc, opts->secret_key, err);
-    if (opts->secret_key != NULL && c->secret_key == NULL)
+    if (c->secret_key == NULL)
         goto fail;
 
     if (opts->session_token != NULL) {
@@ -253,7 +258,7 @@ s3_client_delete(s3_client_t *client)
     s3_free(&client->alloc, client);
 }
 
-/* ----------------- PUT / GET через coio_call ----------------- */
+/* ----------------- API ----------------- */
 
 struct s3_put_task {
     s3_client_t *client;
@@ -261,7 +266,6 @@ struct s3_put_task {
     int fd;
     off_t offset;
     size_t size;
-    size_t bytes_written;
 
     s3_error_t err;
     s3_error_code_t code;
@@ -545,7 +549,7 @@ s3_client_delete_objects(s3_client_t *client,
     struct s3_delete_objects_task task;
     memset(&task, 0, sizeof(task));
     task.client = client;
-    task.opts   = *opts;       /* копируем саму структуру */
+    task.opts   = *opts;
     s3_error_clear(&task.err);
     task.code   = S3_E_OK;
 
