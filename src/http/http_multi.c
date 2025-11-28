@@ -25,7 +25,6 @@ struct s3_multi_req {
     /* Результат */
     s3_error_t err;
     s3_error_code_t code;
-    size_t bytes_written;
     long http_status;
     long curl_code;
 
@@ -71,7 +70,7 @@ s3_multi_backend_wakeup(s3_http_multi_backend_t *mb)
 
 /*
  * Перенос pending-запросов в CURLM с блокировкой.
- * Здесь можно контролировать максимум inflight, если понадобится.
+ * TODO: Здесь можно контролировать максимум inflight, если понадобится.
  */
 static void
 s3_multi_backend_flush_pending_locked(s3_http_multi_backend_t *mb)
@@ -90,6 +89,7 @@ s3_multi_backend_flush_pending_locked(s3_http_multi_backend_t *mb)
                          0, 0, 0);
             req->code = S3_E_INTERNAL;
             req->done = 1;
+            s3_multi_backend_wakeup(mb);
             continue;
         }
 
@@ -105,6 +105,7 @@ s3_multi_backend_flush_pending_locked(s3_http_multi_backend_t *mb)
                          0, 0, (long)mc);
             req->code = S3_E_CURL;
             req->done = 1;
+            s3_multi_backend_wakeup(mb);
             continue;
         }
 
@@ -171,12 +172,7 @@ s3_multi_backend_process_done(s3_http_multi_backend_t *mb)
         }
 
         req->code = code;
-
-        if (req->easy != NULL)
-            req->bytes_written = req->easy->write_bytes_total;
-
         req->done = 1;
-
         mb->running--;
 
         s3_multi_backend_wakeup(mb);
@@ -246,14 +242,13 @@ s3_multi_thread_main(void *arg)
 static s3_error_code_t
 s3_http_multi_submit_and_wait(s3_http_multi_backend_t *mb,
                               s3_easy_handle_t *easy,
-                              size_t *bytes_written,
                               s3_error_t *error)
 {
     s3_error_t local_err = S3_ERROR_INIT;
     s3_error_t *err = error ? error : &local_err;
 
-    struct s3_multi_req *req =
-        (struct s3_multi_req *)malloc(sizeof(*req));
+    struct s3_multi_req *req = s3_alloc(&mb->base.client->alloc, sizeof(*req));
+
     if (req == NULL) {
         s3_error_set(err, S3_E_NOMEM,
                      "Out of memory in multi backend",
@@ -295,15 +290,12 @@ s3_http_multi_submit_and_wait(s3_http_multi_backend_t *mb,
     if (error != NULL)
         *error = req->err;
 
-    if (bytes_written != NULL)
-        *bytes_written = req->bytes_written;
+    s3_error_code_t code = req->code;
 
-    s3_error_code_t rc = req->code;
-
-    free(req);
+    s3_free(&mb->base.client->alloc, req);
     /* easy не трогаем – ответственность вызывающей стороны */
 
-    return rc;
+    return code;
 }
 
 /* --------- реализация vtable: PUT / GET --------- */
@@ -331,7 +323,7 @@ s3_http_multi_put_fd(struct s3_http_backend_impl *backend,
     if (code != S3_E_OK)
         return code;
 
-    s3_error_code_t rc = s3_http_multi_submit_and_wait(mb, h, NULL, err);
+    code = s3_http_multi_submit_and_wait(mb, h, err);
 
     s3_easy_handle_destroy(h);
 
@@ -362,12 +354,14 @@ s3_http_multi_get_fd(struct s3_http_backend_impl *backend,
     if (code != S3_E_OK)
         return code;
 
-    s3_error_code_t rc =
-        s3_http_multi_submit_and_wait(mb, h, bytes_written, err);
+    code = s3_http_multi_submit_and_wait(mb, h, err);
+
+    if (bytes_written != NULL)
+        *bytes_written = h->write_bytes_total;
 
     s3_easy_handle_destroy(h);
 
-    return rc;
+    return code;
 }
 
 static s3_error_code_t
@@ -392,11 +386,11 @@ s3_http_multi_create_bucket(struct s3_http_backend_impl *backend,
     if (code != S3_E_OK)
         return code;
 
-    s3_error_code_t rc = s3_http_multi_submit_and_wait(mb, h, NULL, err);
+    code = s3_http_multi_submit_and_wait(mb, h, err);
 
     s3_easy_handle_destroy(h);
 
-    return rc;
+    return code;
 }
 
 static s3_error_code_t
@@ -420,26 +414,23 @@ s3_http_multi_list_objects(struct s3_http_backend_impl *backend,
     memset(out, 0, sizeof(*out));
 
     s3_easy_handle_t *h = NULL;
-    s3_error_code_t rc = s3_easy_factory_new_list_objects(client, opts, &h, err);
-    if (rc != S3_E_OK) {
-        return rc;
+    s3_error_code_t code = s3_easy_factory_new_list_objects(client, opts, &h, err);
+    if (code != S3_E_OK) {
+        return code;
     }
 
-    /*
-     * bytes_written нам не нужен (полезные данные в buf.size).
-     */
-    rc = s3_http_multi_submit_and_wait(mb, h, NULL, err);
+    code = s3_http_multi_submit_and_wait(mb, h, err);
 
     s3_mem_buf_t *resp = &h->owned_resp;
     const char *xml = resp->data ? resp->data : "";
 
-    if (rc == S3_E_OK) {
-        rc = s3_parse_list_response(client, xml, out, err);
+    if (code == S3_E_OK) {
+        code = s3_parse_list_response(client, xml, out, err);
     }
 
     s3_easy_handle_destroy(h);
 
-    return rc;
+    return code;
 }
 
 static s3_error_code_t
@@ -460,19 +451,18 @@ s3_http_multi_delete_objects(struct s3_http_backend_impl *backend,
     }
 
     s3_easy_handle_t *h = NULL;
-    s3_error_code_t rc =
-        s3_easy_factory_new_delete_objects(client, opts, &h, err);
-    if (rc != S3_E_OK) {
-        return rc;
+    s3_error_code_t code = s3_easy_factory_new_delete_objects(client, opts, &h, err);
+    if (code != S3_E_OK) {
+        return code;
     }
 
-    rc = s3_http_multi_submit_and_wait(mb, h, NULL, err);
+    code = s3_http_multi_submit_and_wait(mb, h, err);
 
     // TODO: parse xml response if need
 
     s3_easy_handle_destroy(h);
 
-    return rc;
+    return code;
 }
 
 /* --------- destroy + фабрика backend'а --------- */
@@ -505,6 +495,7 @@ s3_http_multi_destroy(struct s3_http_backend_impl *backend)
         struct s3_multi_req *next = req->next;
         if (req->easy != NULL)
             s3_easy_handle_destroy(req->easy);
+
         free(req);
         req = next;
     }
@@ -536,8 +527,7 @@ s3_http_multi_backend_new(struct s3_client *client, s3_error_t *error)
         return NULL;
     }
 
-    s3_http_multi_backend_t *mb =
-        (s3_http_multi_backend_t *)s3_alloc(&client->alloc, sizeof(*mb));
+    s3_http_multi_backend_t *mb = (s3_http_multi_backend_t *)s3_alloc(&client->alloc, sizeof(*mb));
     if (mb == NULL) {
         s3_error_set(err, S3_E_NOMEM,
                      "Failed to allocate s3_http_multi_backend",
@@ -553,6 +543,7 @@ s3_http_multi_backend_new(struct s3_client *client, s3_error_t *error)
     if (mb->multi == NULL) {
         s3_error_set(err, S3_E_INIT,
                      "curl_multi_init failed", 0, 0, 0);
+
         s3_free(&client->alloc, mb);
         return NULL;
     }
